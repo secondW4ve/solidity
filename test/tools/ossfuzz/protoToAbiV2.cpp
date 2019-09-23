@@ -453,9 +453,10 @@ void ProtoConverter::visit(DynamicByteArrayType const& _x)
 	m_isLastDynParamRightPadded = true;
 }
 
-// TODO: Implement struct visitor
-void ProtoConverter::visit(StructType const&)
+void ProtoConverter::visit(StructType const& _x)
 {
+	for (auto const& type: _x.t())
+		visit(type);
 }
 
 std::string ProtoConverter::arrayDimInfoAsString(ArrayDimensionInfo const& _x)
@@ -503,8 +504,9 @@ std::string ProtoConverter::getValueByBaseType(ArrayType const& _x)
 			getNextCounter(),
 			_x.dynbytesty().type() == DynamicByteArrayType::BYTES
 		);
-	// TODO: Implement structs.
 	case ArrayType::kStty:
+		m_structBaseType = true;
+		return "";
 	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
 		solAssert(false, "Proto ABIv2 fuzzer: Invalid array base type");
 	}
@@ -726,6 +728,11 @@ void ProtoConverter::visit(Type const& _x)
 
 void ProtoConverter::visit(VarDecl const& _x)
 {
+	std::ostream typeStream;
+	TypeVisitor{_x.type()}.print(typeStream);
+	// createVarDecl(typeStream, location, varSuffix);
+	// AssignmentVisitor{_x.type()}.print(assignStream);
+	// createAssignment(assignStream);
 	visit(_x.type());
 }
 
@@ -991,4 +998,328 @@ string ProtoConverter::contractToString(Contract const& _input)
 {
 	visit(_input);
 	return m_output.str();
+}
+
+/// StructDecl visitor
+string StructDeclVisitor::operator()(BoolType const&)
+{
+	return Whiskers(R"(
+	bool m_<i>;
+	)")
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(IntegerType const& _x)
+{
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", getIntTypeAsString(_x))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(FixedByteType const& _x)
+{
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", getFixedByteTypeAsString(_x))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(AddressType const& _x)
+{
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", getAddressTypeAsString(_x))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(ArrayType const& _x)
+{
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", getAddressTypeAsString(_x))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(DynamicByteArrayType const& _x)
+{
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", bytesArrayTypeAsString(_x))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(StructType const& _x)
+{
+	// TODO: Create struct decl
+	ostringstream out;
+
+	for (auto const& type: _x.t())
+		out << (*this).evaluate(type);
+
+	return Whiskers(R"(
+	<type> m_<i>;
+	)")
+	("type", "S" + to_string(m_structCounter++))
+	("i", to_string(m_counter++))
+	.render();
+}
+
+string StructDeclVisitor::operator()(ValueType const& _x)
+{
+
+}
+
+string StructDeclVisitor::operator()(NonValueType const& _x)
+{
+
+}
+
+string StructDeclVisitor::operator()(Type const& _x)
+{
+
+}
+
+/// SolProtoType visitor
+bool SolProtoTypeVisitor::visit(ValueType const& _type)
+{
+	switch (_type.value_type_oneof_case())
+	{
+	case ValueType::kInty:
+		visit(_type.inty());
+		break;
+	case ValueType::kByty:
+		visit(_type.byty());
+		break;
+	case ValueType::kAdty:
+		visit(_type.adty());
+		break;
+	case ValueType::kBoolty:
+		visit(_type.boolty());
+		break;
+	case ValueType::VALUE_TYPE_ONEOF_NOT_SET:
+		return false;
+	}
+	return true;
+}
+
+bool SolProtoTypeVisitor::visit(NonValueType const& _type)
+{
+	switch (_type.nonvalue_type_oneof_case())
+	{
+	case NonValueType::kDynbytearray:
+		visit(_type.dynbytearray());
+		break;
+	case NonValueType::kArrtype:
+		visit(_type.arrtype());
+		break;
+	case NonValueType::kStype:
+		visit(_type.stype());
+		break;
+	case NonValueType::NONVALUE_TYPE_ONEOF_NOT_SET:
+		return false;
+	}
+	return true;
+}
+
+bool SolProtoTypeVisitor::visit(Type const& _type)
+{
+	switch (_x.type_oneof_case())
+	{
+	case Type::kVtype:
+		visit(_x.vtype());
+		break;
+	case Type::kNvtype:
+		visit(_x.nvtype());
+		break;
+	case Type::TYPE_ONEOF_NOT_SET:
+		return false;
+	}
+	return true;
+}
+
+/// Type visitor
+bool TypeVisitor::visit(BoolType const&)
+{
+	*m_ostream << "bool";
+	return true;
+}
+
+bool TypeVisitor::visit(IntegerType const& _type)
+{
+	*m_ostream << getIntTypeAsString(_type);
+	return true;
+}
+
+bool TypeVisitor::visit(FixedByteType const& _type)
+{
+	*m_ostream << getFixedByteTypeAsString(_type);
+	return true;
+}
+
+bool TypeVisitor::visit(AddressType const& _type)
+{
+	*m_ostream << getAddressTypeAsString(_type);
+	return true;
+}
+
+bool TypeVisitor::visit(ArrayType const& _type)
+{
+	if (_type.is_static())
+		m_array << "[" << getStaticArrayLengthFromFuzz(_type.length()) << "]";
+	else
+		m_array << "[]";
+	visit(_type.t());
+	return true;
+}
+
+bool TypeVisitor::endVisit(ArrayType const& _type)
+{
+	*m_ostream << m_array.str();
+	m_array.clear();
+}
+
+bool TypeVisitor::visit(DynamicByteArrayType const& _type)
+{
+	*m_ostream << bytesArrayTypeAsString(_type);
+}
+
+bool TypeVisitor::visit(StructType const& _type)
+{
+
+}
+
+void TypeVisitor::print(std::ostream& _stream)
+{
+	m_ostream = &_stream;
+	SolProtoTypeAdaptor<TypeVisitor>{*m_type}.accept(*this);
+	m_ostream = nullptr;
+}
+
+/// VarDecl visitor
+bool VarDeclVisitor::visit(BoolType const&)
+{
+	writeDecl(string("bool"));
+	return true;
+}
+
+bool VarDeclVisitor::visit(IntegerType const& _type)
+{
+	writeDecl(getIntTypeAsString(_type));
+	return true;
+}
+
+bool VarDeclVisitor::visit(FixedByteType const& _type)
+{
+	writeDecl(getFixedByteTypeAsString(_type));
+	return true;
+}
+
+bool VarDeclVisitor::visit(AddressType const& _type)
+{
+	writeDecl(getAddressTypeAsString(_type));
+	return true;
+}
+
+bool VarDeclVisitor::visit(ArrayType const& _type)
+{
+	// Array type is dynamically encoded if one of the following is true
+	//   - array base type is "bytes" or "string"
+	//   - at least one array dimension is dynamically sized.
+	if (_type.base_type_oneof_case() == ArrayType::kDynbytesty)
+		m_isLastDynParamRightPadded = true;
+	else
+		for (auto const& dim: _type.info())
+			if (!dim.is_static())
+			{
+				m_isLastDynParamRightPadded = true;
+				break;
+			}
+
+	string baseType = {};
+	switch (_type.base_type_oneof_case())
+	{
+	case ArrayType::kInty:
+		baseType = getIntTypeAsString(_type.inty());
+		break;
+	case ArrayType::kByty:
+		baseType = getFixedByteTypeAsString(_type.byty());
+		break;
+	case ArrayType::kAdty:
+		baseType = getAddressTypeAsString(_type.adty());
+		break;
+	case ArrayType::kBoolty:
+		baseType = getBoolTypeAsString();
+		break;
+	case ArrayType::kDynbytesty:
+		baseType = bytesArrayTypeAsString(_type.dynbytesty());
+		break;
+	case ArrayType::kStty:
+	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
+		return false;
+	}
+	std::string type = arrayTypeAsString(baseType, _type);
+	// if storage: writeDecl(type) else writeDecl(type, "memory");
+
+	return true;
+}
+
+bool VarDeclVisitor::visit(DynamicByteArrayType const&)
+{
+
+}
+
+bool VarDeclVisitor::visit(StructType const&)
+{
+
+}
+
+bool VarDeclVisitor::visit(ValueType const&)
+{
+
+}
+
+bool VarDeclVisitor::visit(NonValueType const&)
+{
+
+}
+
+bool VarDeclVisitor::visit(Type const&)
+{
+
+}
+
+void VarDeclVisitor::print(ostream& _stream)
+{
+	m_ostream = &_stream;
+	SolProtoTypeAdaptor<VarDeclVisitor>{*m_type}.accept(*this);
+	m_ostream = nullptr;
+}
+
+void VarDeclVisitor::writeLine(string const& _line)
+{
+	*m_ostream << indentation() << _line << endl;
+}
+
+void VarDeclVisitor::writeDecl(string const& _type, string const& _location)
+{
+	string s = indentation() + Whiskers(
+		R"(<T> <?Loc><location> </Loc>x_<i>)")
+		("T", _type)
+		("Loc", !_location.empty())
+		("location", _location)
+		("i", to_string(m_varSuffix))
+		.render();
+	writeLine(s);
 }
