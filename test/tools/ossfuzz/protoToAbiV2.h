@@ -133,30 +133,8 @@ private:
 		ARRAY
 	};
 
-	void visit(BoolType const&);
-
-	void visit(IntegerType const&);
-
-	void visit(FixedByteType const&);
-
-	void visit(AddressType const&);
-
-	void visit(ArrayType const&);
-
-	void visit(DynamicByteArrayType const&);
-
-	void visit(StructType const&);
-
-	void visit(ValueType const&);
-
-	void visit(NonValueType const&);
-
-	void visit(Type const&);
-
 	void visit(VarDecl const&);
-
 	void visit(TestFunction const&);
-
 	void visit(Contract const&);
 
 	std::string getValueByBaseType(ArrayType const&);
@@ -497,6 +475,21 @@ private:
 using SolProtoType = boost::variant<BoolType, IntegerType, FixedByteType, AddressType, ArrayType,
 	DynamicByteArrayType, StructType, ValueType, NonValueType, Type>;
 
+/// Adaptor template to add acceptors to SolProtoTypes
+template <typename V>
+class SolProtoTypeAdaptor
+{
+public:
+	explicit SolProtoTypeAdaptor(SolProtoType& _type): m_type(&_type) {}
+	void accept(V& _visitor)
+	{
+		if (_visitor.visit(*m_type))
+			_visitor.endVisit(*m_type);
+	}
+private:
+	SolProtoType* m_type;
+};
+
 /// Visitor interface for Solidity protobuf types.
 class SolProtoTypeVisitor
 {
@@ -668,34 +661,12 @@ private:
 /// Visitor to format solidity types
 class TypeVisitor: public SolProtoTypeVisitor
 {
-	TypeVisitor(SolProtoType& _type): m_type(&_type) {}
-
-	bool visit(BoolType const&) override;
-	bool visit(IntegerType const&) override;
-	bool visit(FixedByteType const&) override;
-	bool visit(AddressType const&) override;
-	bool visit(ArrayType const&) override;
-	bool visit(DynamicByteArrayType const&) override;
-	bool visit(StructType const&) override;
-	bool visit(ValueType const&) override;
-	bool visit(NonValueType const&) override;
-	bool visit(Type const&) override;
-private:
-	void print(std::ostream&);
-	void writeLine(std::string const&);
-	std::ostream* m_ostream = nullptr;
-	std::ostream m_array;
-	SolProtoType* m_type;
-};
-
-/// Visitor to format solidity variable declaration statements
-/// of the form: T <location> x<i>;
-class VarDeclVisitor: public SolProtoTypeVisitor
-{
-	VarDeclVisitor(unsigned _idx, SolProtoType& _type):
-		m_varSuffix(_idx),
-		m_indentation(1),
-		m_type(&_type)
+	TypeVisitor(SolProtoType& _type, unsigned _structCounter = 0):
+		m_type(&_type),
+		m_structType(false),
+		m_structCounter(_structCounter),
+		m_structMemberCounter(0),
+		m_indentation(1)
 	{}
 
 	bool visit(BoolType const&) override;
@@ -703,195 +674,73 @@ class VarDeclVisitor: public SolProtoTypeVisitor
 	bool visit(FixedByteType const&) override;
 	bool visit(AddressType const&) override;
 	bool visit(ArrayType const&) override;
+	void endVisit(ArrayType const&) override;
 	bool visit(DynamicByteArrayType const&) override;
 	bool visit(StructType const&) override;
-
-	void endVisit(ArrayType const&) override;
-	void endVisit(StructType const&) override;
 private:
-	void print(std::ostream&);
-	void writeLine(std::string const&);
-
-	/// Formats variable declaration of type @a _type in location @a _location.
-	/// @a _location has a default value that equals an empty string
-	void writeDecl(std::string const& _type, std::string const& _location = {});
 	std::string indentation()
 	{
 		return std::string(m_indentation * 2, ' ');
 	}
 
-	unsigned m_varSuffix;
-	unsigned m_indentation;
+	std::function<void(std::string const&)> m_typeLambda =
+		[&](std::string const& _type)
+		{
+			std::string s = dev::Whiskers(R"(<type><?isStructMem> m<i>;</isStructMem>)")
+				("type", _type)
+				("isStructMem", m_structType)
+				("i", std::to_string(m_structMemberCounter++))
+				.render();
+			writeLine(s, m_structType);
+		};
+	void print(std::ostream&);
+	void writeLine(std::string const&, bool _endWithNL = false);
 	std::ostream* m_ostream = nullptr;
+	std::ostringstream m_array;
 	SolProtoType* m_type;
-};
-
-template <typename V>
-class SolProtoTypeAdaptor
-{
-public:
-	explicit SolProtoTypeAdaptor(SolProtoType& _type): m_type(&_type) {}
-	void accept(V& _visitor)
-	{
-		if (_visitor.visit(*m_type))
-			_visitor.endVisit(*m_type);
-	}
-private:
-	SolProtoType* m_type;
-};
-
-/// Visitor to format solidity assigment statements of the form
-/// x<i> = <value>;
-class AssignmentVisitor : public boost::static_visitor<std::string>
-{
-	std::string operator()(BoolType const&);
-
-	std::string operator()(IntegerType const&);
-
-	std::string operator()(FixedByteType const&);
-
-	std::string operator()(AddressType const&);
-
-	std::string operator()(ArrayType const&);
-
-	std::string operator()(DynamicByteArrayType const&);
-
-	std::string operator()(StructType const&);
-
-	std::string operator()(ValueType const&);
-
-	std::string operator()(NonValueType const&);
-
-	std::string operator()(Type const&);
-
-	std::string evaluate(SolProtoType const& _type)
-	{
-		return boost::apply_visitor(*this, _type);
-	}
-
-private:
-
-};
-
-class ArrayTypeVisitor : public boost::static_visitor<std::string>
-{
-public:
-	std::string operator()(BoolType const&);
-
-	std::string operator()(IntegerType const&);
-
-	std::string operator()(FixedByteType const&);
-
-	std::string operator()(AddressType const&);
-
-	std::string operator()(ArrayType const&);
-
-	std::string operator()(DynamicByteArrayType const&);
-
-	std::string operator()(StructType const&);
-
-	std::string operator()(ValueType const&);
-
-	std::string operator()(NonValueType const&);
-
-	std::string operator()(Type const&);
-
-	std::string evaluate(SolProtoType const& _type)
-	{
-		return boost::apply_visitor(*this, _type);
-	}
-
-private:
-
-};
-
-template<typename T>
-void visit(T& c, Type const& _x)
-{
-	switch (_x.type_oneof_case()) {
-		case Type::kVtype:
-			c.visit(_x.vtype());
-			break;
-		case Type::kNvtype:
-			c.visit(_x.nvtype());
-			break;
-		case Type::TYPE_ONEOF_NOT_SET:
-			break;
-	}
-}
-
-class StructDeclVisitor : public boost::static_visitor<std::string>
-{
-public:
-	StructDeclVisitor() : m_counter(0), m_structCounter(0)
-	{}
-
-	std::string operator()(BoolType const&);
-
-	std::string operator()(IntegerType const&);
-
-	std::string operator()(FixedByteType const&);
-
-	std::string operator()(AddressType const&);
-
-	std::string operator()(ArrayType const&);
-
-	std::string operator()(DynamicByteArrayType const&);
-
-	std::string operator()(StructType const&);
-
-	std::string operator()(ValueType const&);
-
-	std::string operator()(NonValueType const&);
-
-	std::string operator()(Type const&);
-
-	std::string evaluate(SolProtoType);
-
-private:
-	static unsigned getIntWidth(IntegerType const& _x)
-	{
-		return 8 * ((_x.width() % 32) + 1);
-	}
-
-	static bool isIntSigned(IntegerType const& _x)
-	{
-		return _x.is_signed();
-	}
-
-	static std::string getIntTypeAsString(IntegerType const& _x)
-	{
-		return ((isIntSigned(_x) ? "int" : "uint") + std::to_string(getIntWidth(_x)));
-	}
-
-	static unsigned getFixedByteWidth(FixedByteType const& _x)
-	{
-		return (_x.width() % 32) + 1;
-	}
-
-	static std::string getFixedByteTypeAsString(FixedByteType const& _x)
-	{
-		return "bytes" + std::to_string(getFixedByteWidth(_x));
-	}
-
-	static std::string getAddressTypeAsString(AddressType const& _x)
-	{
-		return (_x.payable() ? "address payable" : "address");
-	}
-
-	static std::string bytesArrayTypeAsString(DynamicByteArrayType const& _x)
-	{
-		switch (_x.type()) {
-			case DynamicByteArrayType::BYTES:
-				return "bytes";
-			case DynamicByteArrayType::STRING:
-				return "string";
-		}
-	}
-
-	unsigned m_counter;
+	bool m_structType;
 	unsigned m_structCounter;
-	std::ostringstream m_output;
+	unsigned m_structMemberCounter;
+	unsigned m_indentation;
+};
+
+/// Visitor to format solidity assigment-check statements of the form
+/// x<i> = <value>;
+/// if (x<i> != <value>) return <nonzero_err_code>;
+class AssignCheckVisitor: public SolProtoTypeVisitor
+{
+	bool visit(BoolType const&) override;
+	bool visit(IntegerType const&) override;
+	bool visit(FixedByteType const&) override;
+	bool visit(AddressType const&) override;
+	bool visit(ArrayType const&) override;
+	void endVisit(ArrayType const&) override;
+	bool visit(DynamicByteArrayType const&) override;
+	bool visit(StructType const&) override;
+private:
+
+};
+
+class TypeInfo
+{
+	TypeInfo(SolProtoType& _type): m_type(&_type) {}
+private:
+	SolProtoType* m_type;
+	enum class DataType
+	{
+		VALUE = 0,
+		STRING = 1,
+		BYTES = 2,
+		ARRAY = 3
+	};
+};
+
+class VarInfo
+{
+	VarInfo(std::string _name, TypeInfo _typeInfo)
+private:
+	std::string m_name;
+	TypeInfo* m_typeInfo;
 };
 }
 }

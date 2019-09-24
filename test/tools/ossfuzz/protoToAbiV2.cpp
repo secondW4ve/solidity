@@ -364,80 +364,6 @@ std::string ProtoConverter::integerValueAsString(bool _sign, unsigned _width, un
 		return uintValueAsString(_width, _counter);
 }
 
-std::string ProtoConverter::bytesArrayTypeAsString(DynamicByteArrayType const& _x)
-{
-	switch (_x.type())
-	{
-	case DynamicByteArrayType::BYTES:
-		return "bytes";
-	case DynamicByteArrayType::STRING:
-		return "string";
-	}
-}
-
-std::string ProtoConverter::structTypeAsString(StructType const&)
-{
-	// TODO: Implement this
-	return {};
-}
-
-void ProtoConverter::visit(BoolType const&)
-{
-	visitType(
-		DataType::VALUE,
-		getBoolTypeAsString(),
-		boolValueAsString(getNextCounter())
-	);
-}
-
-void ProtoConverter::visit(IntegerType const& _x)
-{
-	visitType(
-		DataType::VALUE,
-		getIntTypeAsString(_x),
-		integerValueAsString(isIntSigned(_x), getIntWidth(_x), getNextCounter())
-	);
-}
-
-void ProtoConverter::visit(AddressType const& _x)
-{
-	visitType(
-		DataType::VALUE,
-		getAddressTypeAsString(_x),
-		addressValueAsString(getNextCounter())
-	);
-}
-
-void ProtoConverter::visit(FixedByteType const& _x)
-{
-	visitType(
-		DataType::VALUE,
-		getFixedByteTypeAsString(_x),
-		fixedByteValueAsString(getFixedByteWidth(_x), getNextCounter())
-	);
-}
-
-void ProtoConverter::visit(ValueType const& _x)
-{
-	switch (_x.value_type_oneof_case())
-	{
-		case ValueType::kInty:
-			visit(_x.inty());
-			break;
-		case ValueType::kByty:
-			visit(_x.byty());
-			break;
-		case ValueType::kAdty:
-			visit(_x.adty());
-			break;
-		case ValueType::kBoolty:
-			visit(_x.boolty());
-			break;
-		case ValueType::VALUE_TYPE_ONEOF_NOT_SET:
-			break;
-	}
-}
-
 void ProtoConverter::visit(DynamicByteArrayType const& _x)
 {
 	bool isBytes = _x.type() == DynamicByteArrayType::BYTES;
@@ -693,43 +619,27 @@ void ProtoConverter::visit(ArrayType const& _x)
 	visitArrayType(baseType, _x);
 }
 
-void ProtoConverter::visit(NonValueType const& _x)
-{
-	switch (_x.nonvalue_type_oneof_case())
-	{
-	case NonValueType::kDynbytearray:
-		visit(_x.dynbytearray());
-		break;
-	case NonValueType::kArrtype:
-		visit(_x.arrtype());
-		break;
-	case NonValueType::kStype:
-		visit(_x.stype());
-		break;
-	case NonValueType::NONVALUE_TYPE_ONEOF_NOT_SET:
-		break;
-	}
-}
-
-void ProtoConverter::visit(Type const& _x)
-{
-	switch (_x.type_oneof_case())
-	{
-	case Type::kVtype:
-		visit(_x.vtype());
-		break;
-	case Type::kNvtype:
-		visit(_x.nvtype());
-		break;
-	case Type::TYPE_ONEOF_NOT_SET:
-		break;
-	}
-}
-
 void ProtoConverter::visit(VarDecl const& _x)
 {
 	std::ostream typeStream;
+	// For types except struct, this prints the
+	// type string to stream.
+	// For structs, this prints struct definitions.
 	TypeVisitor{_x.type()}.print(typeStream);
+	// TODO: If _x.type() is a struct, then
+	// we must create a vardecl of the outer most
+	// struct type S0.
+	//	if (_x.type().has_nvtype() && _x.type().nvtype().has_stype())
+
+	// TODO: If vardecl not in storage and is of
+	// non-value type, then set location to memory
+	// TODO: If vardecl is of non value type, then
+	// set parameter location as "memory" and
+	// "calldata" for the public and external
+	// functions respectively.
+
+	// if (m_isStorage) don't add location
+	// else add location according to type
 	// createVarDecl(typeStream, location, varSuffix);
 	// AssignmentVisitor{_x.type()}.print(assignStream);
 	// createAssignment(assignStream);
@@ -1000,97 +910,6 @@ string ProtoConverter::contractToString(Contract const& _input)
 	return m_output.str();
 }
 
-/// StructDecl visitor
-string StructDeclVisitor::operator()(BoolType const&)
-{
-	return Whiskers(R"(
-	bool m_<i>;
-	)")
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(IntegerType const& _x)
-{
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", getIntTypeAsString(_x))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(FixedByteType const& _x)
-{
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", getFixedByteTypeAsString(_x))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(AddressType const& _x)
-{
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", getAddressTypeAsString(_x))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(ArrayType const& _x)
-{
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", getAddressTypeAsString(_x))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(DynamicByteArrayType const& _x)
-{
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", bytesArrayTypeAsString(_x))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(StructType const& _x)
-{
-	// TODO: Create struct decl
-	ostringstream out;
-
-	for (auto const& type: _x.t())
-		out << (*this).evaluate(type);
-
-	return Whiskers(R"(
-	<type> m_<i>;
-	)")
-	("type", "S" + to_string(m_structCounter++))
-	("i", to_string(m_counter++))
-	.render();
-}
-
-string StructDeclVisitor::operator()(ValueType const& _x)
-{
-
-}
-
-string StructDeclVisitor::operator()(NonValueType const& _x)
-{
-
-}
-
-string StructDeclVisitor::operator()(Type const& _x)
-{
-
-}
-
 /// SolProtoType visitor
 bool SolProtoTypeVisitor::visit(ValueType const& _type)
 {
@@ -1152,25 +971,25 @@ bool SolProtoTypeVisitor::visit(Type const& _type)
 /// Type visitor
 bool TypeVisitor::visit(BoolType const&)
 {
-	*m_ostream << "bool";
+	m_typeLambda("bool");
 	return true;
 }
 
 bool TypeVisitor::visit(IntegerType const& _type)
 {
-	*m_ostream << getIntTypeAsString(_type);
+	m_typeLambda(getIntTypeAsString(_type));
 	return true;
 }
 
 bool TypeVisitor::visit(FixedByteType const& _type)
 {
-	*m_ostream << getFixedByteTypeAsString(_type);
+	m_typeLambda(getFixedByteTypeAsString(_type));
 	return true;
 }
 
 bool TypeVisitor::visit(AddressType const& _type)
 {
-	*m_ostream << getAddressTypeAsString(_type);
+	m_typeLambda(getAddressTypeAsString(_type));
 	return true;
 }
 
@@ -1184,20 +1003,54 @@ bool TypeVisitor::visit(ArrayType const& _type)
 	return true;
 }
 
-bool TypeVisitor::endVisit(ArrayType const& _type)
+void TypeVisitor::endVisit(ArrayType const& _type)
 {
-	*m_ostream << m_array.str();
+	m_typeLambda(m_array.str());
 	m_array.clear();
 }
 
 bool TypeVisitor::visit(DynamicByteArrayType const& _type)
 {
-	*m_ostream << bytesArrayTypeAsString(_type);
+	m_typeLambda(bytesArrayTypeAsString(_type));
 }
 
 bool TypeVisitor::visit(StructType const& _type)
 {
+	string structDecl = Whiskers(R"(struct S<i> {)")
+		("i", to_string(m_structCounter++))
+		.render();
+	writeLine(structDecl, true);
+	m_indentation++;
+	// If struct within a struct, instantiate
+	// a new TypeVisitor instance.
+	ostringstream recursiveStruct;
+	bool wasStructType = m_structType;
+	m_structType = true;
+	for (auto const& t: _type.t())
+	{
+		if (t.has_nvtype() && t.nvtype().has_stype())
+		{
+			string innerStructDecl = Whiskers(R"(S<i>)")
+				("i", to_string(m_structCounter))
+				.render();
+			m_typeLambda(innerStructDecl);
+			TypeVisitor{&t, m_structCounter}.print(recursiveStruct);
+		}
+		else
+			visit(t);
+	}
+	m_indentation--;
+	writeLine("}", true);
+	writeLine(recursiveStruct.str(), true);
+	m_structType = wasStructType;
+}
 
+void TypeVisitor::writeLine(string const& _line, bool _endWithNL)
+{
+	if (_endWithNL)
+		*m_ostream << indentation() << _line << endl;
+	else
+		*m_ostream << indentation() << _line;
 }
 
 void TypeVisitor::print(std::ostream& _stream)
@@ -1207,119 +1060,11 @@ void TypeVisitor::print(std::ostream& _stream)
 	m_ostream = nullptr;
 }
 
-/// VarDecl visitor
-bool VarDeclVisitor::visit(BoolType const&)
+/// AssignCheckVisitor implementation
+bool AssignCheckVisitor::visit(BoolType const& _type)
 {
-	writeDecl(string("bool"));
+//	return ((_counter % 2) ? "true" : "false");
 	return true;
 }
 
-bool VarDeclVisitor::visit(IntegerType const& _type)
-{
-	writeDecl(getIntTypeAsString(_type));
-	return true;
-}
-
-bool VarDeclVisitor::visit(FixedByteType const& _type)
-{
-	writeDecl(getFixedByteTypeAsString(_type));
-	return true;
-}
-
-bool VarDeclVisitor::visit(AddressType const& _type)
-{
-	writeDecl(getAddressTypeAsString(_type));
-	return true;
-}
-
-bool VarDeclVisitor::visit(ArrayType const& _type)
-{
-	// Array type is dynamically encoded if one of the following is true
-	//   - array base type is "bytes" or "string"
-	//   - at least one array dimension is dynamically sized.
-	if (_type.base_type_oneof_case() == ArrayType::kDynbytesty)
-		m_isLastDynParamRightPadded = true;
-	else
-		for (auto const& dim: _type.info())
-			if (!dim.is_static())
-			{
-				m_isLastDynParamRightPadded = true;
-				break;
-			}
-
-	string baseType = {};
-	switch (_type.base_type_oneof_case())
-	{
-	case ArrayType::kInty:
-		baseType = getIntTypeAsString(_type.inty());
-		break;
-	case ArrayType::kByty:
-		baseType = getFixedByteTypeAsString(_type.byty());
-		break;
-	case ArrayType::kAdty:
-		baseType = getAddressTypeAsString(_type.adty());
-		break;
-	case ArrayType::kBoolty:
-		baseType = getBoolTypeAsString();
-		break;
-	case ArrayType::kDynbytesty:
-		baseType = bytesArrayTypeAsString(_type.dynbytesty());
-		break;
-	case ArrayType::kStty:
-	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
-		return false;
-	}
-	std::string type = arrayTypeAsString(baseType, _type);
-	// if storage: writeDecl(type) else writeDecl(type, "memory");
-
-	return true;
-}
-
-bool VarDeclVisitor::visit(DynamicByteArrayType const&)
-{
-
-}
-
-bool VarDeclVisitor::visit(StructType const&)
-{
-
-}
-
-bool VarDeclVisitor::visit(ValueType const&)
-{
-
-}
-
-bool VarDeclVisitor::visit(NonValueType const&)
-{
-
-}
-
-bool VarDeclVisitor::visit(Type const&)
-{
-
-}
-
-void VarDeclVisitor::print(ostream& _stream)
-{
-	m_ostream = &_stream;
-	SolProtoTypeAdaptor<VarDeclVisitor>{*m_type}.accept(*this);
-	m_ostream = nullptr;
-}
-
-void VarDeclVisitor::writeLine(string const& _line)
-{
-	*m_ostream << indentation() << _line << endl;
-}
-
-void VarDeclVisitor::writeDecl(string const& _type, string const& _location)
-{
-	string s = indentation() + Whiskers(
-		R"(<T> <?Loc><location> </Loc>x_<i>)")
-		("T", _type)
-		("Loc", !_location.empty())
-		("location", _location)
-		("i", to_string(m_varSuffix))
-		.render();
-	writeLine(s);
-}
+bool AssignCheckVisitor::visit()
