@@ -108,7 +108,7 @@ public:
 		m_varCounter(0),
 		m_returnValue(1),
 		m_isLastDynParamRightPadded(false),
-		m_structBaseType(false)
+		m_structCounter(0)
 	{}
 
 	ProtoConverter(ProtoConverter const&) = delete;
@@ -127,25 +127,25 @@ private:
 		PUBLIC,
 		EXTERNAL
 	};
-	enum class DataType
+	enum class ComparisonBuiltIn
 	{
 		BYTES,
 		STRING,
-		VALUE,
-		ARRAY
+		VALUE
 	};
 
 	void visit(VarDecl const&);
 	void visit(TestFunction const&);
 	void visit(Contract const&);
+	std::string visit(Type const&);
 
 	// Utility functions
-	void appendChecks(DataType _type, std::string const& _varName, std::string const& _rhs);
+	void appendChecks(ComparisonBuiltIn _type, std::string const& _varName, std::string const& _rhs);
 
 	void addVarDef(std::string const& _varName, std::string const& _rhs);
 
 	void addCheckedVarDef(
-		DataType _type,
+		ComparisonBuiltIn _type,
 		std::string const& _varName,
 		std::string const& _paramName,
 		std::string const& _rhs
@@ -173,17 +173,19 @@ private:
 		Delimiter _delimiter = Delimiter::ADD
 	);
 
-	void appendVarDeclToOutput(
+	std::string appendVarDeclToOutput(
 		std::string const& _type,
 		std::string const& _varName,
 		std::string const& _qualifier
 	);
 
+	std::string visitType(Type const& _type);
+
 	void checkResizeOp(std::string const& _varName, unsigned _len);
 
 	void createDeclAndParamList(
 		std::string const& _type,
-		DataType _dataType,
+		ComparisonBuiltIn _dataType,
 		std::string& _varName,
 		std::string& _paramName
 	);
@@ -192,7 +194,7 @@ private:
 
 	std::string typedParametersAsString(CalleeType _calleeType);
 
-	void writeHelperFunctions();
+	std::string writeHelperFunctions();
 
 	// Function definitions
 	// m_counter is used to derive values for typed variables
@@ -208,31 +210,25 @@ private:
 	}
 
 	/// If type is struct or type is array of struct
-	static bool containsStruct(Type const& _t)
-	{
-		if (_t.has_nvtype() && _t.nvtype().has_stype())
-			return true;
-		else if (_t.has_nvtype() && _t.nvtype().has_arrtype())
-			return containsStruct(_t.nvtype().arrtype().t());
-		else
-			return false;
-	}
+	static StructType const* findStruct(Type const& _t);
 
 	// Accepts an unsigned counter and returns a pair of strings
 	// First string is declared name (s_varNamePrefix<varcounter_value>)
 	// Second string is parameterized name (s_paramPrefix<varcounter_value>)
-//	auto newVarNames(unsigned _varCounter)
-//	{
-//		return std::make_pair(
-//			s_varNamePrefix + std::to_string(_varCounter),
-//			s_paramNamePrefix + std::to_string(_varCounter)
-//		);
-//	}
+	auto newVarNames(unsigned _varCounter)
+	{
+		return std::make_pair(
+			s_varNamePrefix + std::to_string(_varCounter),
+			s_paramNamePrefix + std::to_string(_varCounter)
+		);
+	}
 
-	std::string getQualifier(DataType _dataType)
+	std::string getQualifier(ComparisonBuiltIn _dataType)
 	{
 		return ((isValueType(_dataType) || m_isStateVar) ? "" : "memory");
 	}
+
+	std::string getQualifier(Type const& _type);
 
 	bool isLastDynParamRightPadded()
 	{
@@ -242,10 +238,12 @@ private:
 	static std::string delimiterToString(Delimiter _delimiter);
 
 	// Static function definitions
-	static bool isValueType(DataType _dataType)
+	static bool isValueType(ComparisonBuiltIn _dataType)
 	{
-		return _dataType == DataType::VALUE;
+		return _dataType == ComparisonBuiltIn::VALUE;
 	}
+
+	static bool isValueType(Type const& _type);
 
 	static unsigned getIntWidth(IntegerType const& _x)
 	{
@@ -314,7 +312,8 @@ private:
 	/// Contains the test program
 	std::ostringstream m_output;
 	/// Temporary storage for state variable definitions
-	std::ostringstream m_statebuffer;
+	std::ostringstream m_local;
+	std::ostringstream m_global;
 	/// Contains a subset of the test program. This subset contains
 	/// checks to be encoded in the test program
 	std::ostringstream m_checks;
@@ -331,12 +330,14 @@ private:
 	/// passed to a function call is of a type that is going to be
 	/// right padded by the ABI encoder.
 	bool m_isLastDynParamRightPadded;
-	/// Flag that is true if an ArrayType has StructType as its
-	/// base type, false otherwise.
-	bool m_structBaseType;
+	/// Struct counter
+	unsigned m_structCounter;
 	static unsigned constexpr s_maxArrayLength = 4;
 	static unsigned constexpr s_maxArrayDimensions = 4;
 	static unsigned constexpr s_maxDynArrayLength = 256;
+	/// Prefixes for declared and parameterized variable names
+	static auto constexpr s_varNamePrefix = "x_";
+	static auto constexpr s_paramNamePrefix = "c_";
 };
 
 /// Visitor interface for Solidity protobuf types.
@@ -383,6 +384,8 @@ public:
 	{
 		return _dataType == DataType::VALUE;
 	}
+
+	static DataType dataType(Type const& _type);
 
 	static unsigned getIntWidth(IntegerType const& _x)
 	{
@@ -553,11 +556,7 @@ private:
 class TypeVisitor: public AbiV2ProtoVisitor<std::string>
 {
 public:
-	TypeVisitor(unsigned _structCounter = 0):
-		m_structCounter(_structCounter),
-		m_structMemberCounter(0),
-		m_indentation(1)
-	{}
+	TypeVisitor(unsigned _structSuffix): m_indentation(1), m_structSuffix(_structSuffix) {}
 
 	std::string visit(BoolType const&) override;
 	std::string visit(IntegerType const&) override;
@@ -570,18 +569,62 @@ public:
 private:
 	std::string indentation()
 	{
-		return std::string(m_indentation * 2, ' ');
+		return std::string(m_indentation * 1, '\t');
 	}
 	std::string lineString(std::string const& _line)
 	{
 		return indentation() + _line + "\n";
 	}
 
+	static bool arrayOfStruct(ArrayType const& _type)
+	{
+		Type const& baseType = _type.t();
+		if (baseType.has_nvtype() && baseType.nvtype().has_stype())
+			return true;
+		else if (baseType.has_nvtype() && baseType.nvtype().has_arrtype())
+			return arrayOfStruct(baseType.nvtype().arrtype());
+		else
+			return false;
+	}
+
 	std::ostringstream m_array;
-	std::ostringstream m_type;
-	unsigned m_structCounter;
-	unsigned m_structMemberCounter;
 	unsigned m_indentation;
+	unsigned m_structSuffix;
+
+	static auto constexpr s_structTypeName = "S";
+};
+
+class StructDeclVisitor: public TypeVisitor
+{
+public:
+	StructDeclVisitor(unsigned _structStartSuffix): TypeVisitor(_structStartSuffix)
+	{
+		m_structCounter = m_structStartSuffix = _structStartSuffix;
+		m_structFieldCounter = 0;
+		m_indentation = 1;
+	}
+	std::string visit(StructType const&) override;
+	unsigned numStructs()
+	{
+		return m_structCounter - m_structStartSuffix;
+	}
+	using AbiV2ProtoVisitor<std::string>::visit;
+	using TypeVisitor::visit;
+private:
+	std::string indentation()
+	{
+		return std::string(m_indentation * 1, '\t');
+	}
+	std::string lineString(std::string const& _line)
+	{
+		return indentation() + _line + "\n";
+	}
+
+	unsigned m_structCounter;
+	unsigned m_structStartSuffix;
+	unsigned m_structFieldCounter;
+	unsigned m_indentation;
+	std::ostringstream m_type;
 };
 
 /// Visitor to format solidity assigment-check statements of the form
@@ -595,7 +638,7 @@ public:
 		m_counter = 0;
 		m_varName = s_varNamePrefix + std::to_string(_suffix);
 		m_paramName = s_paramNamePrefix + std::to_string(_suffix);
-		m_errorCode = 1;
+		m_errorCode = _suffix;
 		m_indentation = 2;
 		m_stateVar = _stateVar;
 	}
@@ -610,7 +653,7 @@ public:
 private:
 	std::string indentation()
 	{
-		return std::string(m_indentation * 2, ' ');
+		return std::string(m_indentation * 1, '\t');
 	}
 	unsigned counter()
 	{
@@ -636,7 +679,7 @@ private:
 class ValueGetterVisitor: AbiV2ProtoVisitor<std::string>
 {
 public:
-	ValueGetterVisitor(): m_counter(0), m_indentation(1) {}
+	ValueGetterVisitor(): m_counter(0) {}
 
 	std::string visit(BoolType const&) override;
 	std::string visit(IntegerType const&) override;
@@ -656,10 +699,6 @@ private:
 	unsigned counter()
 	{
 		return m_counter++;
-	}
-	std::string indentation()
-	{
-		return std::string(m_indentation * 2, ' ');
 	}
 
 	static std::string intValueAsString(unsigned _width, unsigned _counter);
@@ -711,7 +750,6 @@ private:
 	static std::string croppedString(unsigned _numBytes, unsigned _counter, bool _isHexLiteral);
 
 	unsigned m_counter;
-	unsigned m_indentation;
 };
 }
 }

@@ -10,60 +10,119 @@ using namespace std;
 using namespace dev;
 using namespace dev::test::abiv2fuzzer;
 
-// Create a new variable declaration and append said variable to function parameter lists
-// of coder functions.
-// Declared name is x_<i>; parameterized name is c_<i>
-// where <i> is a monotonically increasing integer.
-//void ProtoConverter::createDeclAndParamList(
-//	std::string const& _type,
-//	DataType _dataType,
-//	std::string& _varName,
-//	std::string& _paramName
-//)
-//{
-//	auto varNames = newVarNames(getNextVarCounter());
-//	_varName = varNames.first;
-//	_paramName = varNames.second;
-//
-//	// Declare array
-//	appendVarDeclToOutput(_type, _varName, getQualifier(_dataType));
-//
-//	// Add typed params for calling public and external functions with said type
-//	appendTypedParams(
-//		CalleeType::PUBLIC,
-//		isValueType(_dataType),
-//		_type,
-//		_paramName,
-//		((m_varCounter == 1) ? Delimiter::SKIP : Delimiter::ADD)
-//	);
-//	appendTypedParams(
-//		CalleeType::EXTERNAL,
-//		isValueType(_dataType),
-//		_type,
-//		_paramName,
-//		((m_varCounter == 1) ? Delimiter::SKIP : Delimiter::ADD)
-//	);
-//}
+StructType const* ProtoConverter::findStruct(Type const& _t)
+{
+	if (_t.has_nvtype() && _t.nvtype().has_stype())
+		return &_t.nvtype().stype();
+	else if (_t.has_nvtype() && _t.nvtype().has_arrtype())
+		return findStruct(_t.nvtype().arrtype().t());
+	else
+		return nullptr;
+}
 
-//void ProtoConverter::visitArrayType(std::string const& _baseType, ArrayType const& _x)
-//{
-//	std::string type = arrayTypeAsString(_baseType, _x);
-//	std::string varName, paramName;
-//	createDeclAndParamList(type, DataType::ARRAY, varName, paramName);
-//	// Resize-initialize array and add checks
-//	resizeInitArray(_x, _baseType, varName, paramName);
-//}
-//
-//void ProtoConverter::visitType(
-//	DataType _dataType,
-//	std::string const& _type,
-//	std::string const& _value
-//)
-//{
-//	std::string varName, paramName;
-//	createDeclAndParamList(_type, _dataType, varName, paramName);
-//	addCheckedVarDef(_dataType, varName, paramName, _value);
-//}
+string ProtoConverter::getQualifier(Type const& _type)
+{
+	if (m_isStateVar)
+		return "";
+
+	switch (_type.type_oneof_case())
+	{
+	case Type::kVtype:
+		return "";
+	case Type::kNvtype:
+		return "memory";
+	case Type::TYPE_ONEOF_NOT_SET:
+		solAssert(false, "ABIv2 proto fuzzer: Invalid type");
+	}
+}
+
+string ProtoConverter::appendVarDeclToOutput(
+	string const& _type,
+	string const& _varName,
+	string const& _qualifier
+)
+{
+	// One level of indentation for state variable declarations
+	// Two levels of indentation for local variable declarations
+	return Whiskers(R"(
+	<?isLocalVar>	</isLocalVar><type><?qual> <qualifier></qual> <varName>;)"
+		)
+		("isLocalVar", !m_isStateVar)
+		("type", _type)
+		("qual", !_qualifier.empty())
+		("qualifier", _qualifier)
+		("varName", _varName)
+		.render() +
+		"\n";
+}
+
+bool ProtoConverter::isValueType(Type const& _type)
+{
+	switch (_type.type_oneof_case())
+	{
+	case Type::kVtype:
+		return true;
+	case Type::kNvtype:
+		return false;
+	case Type::TYPE_ONEOF_NOT_SET:
+		solAssert(false, "ABIv2 proto fuzzer: Invalid type");
+	}
+}
+
+pair<string, string> ProtoConverter::visit(Type const& _type)
+{
+	ostringstream local, global;
+
+	auto varNames = newVarNames(getNextVarCounter());
+	string varName = varNames.first;
+	string paramName = varNames.second;
+
+	unsigned structStartSuffix = m_structCounter + 1;
+	if (auto st = findStruct(_type))
+	{
+		StructDeclVisitor sVisitor(structStartSuffix);
+		global << sVisitor.visit(*st);
+		m_structCounter = structStartSuffix + sVisitor.numStructs();
+	}
+
+	string type = TypeVisitor(structStartSuffix).visit(_type);
+
+	// variable declaration
+	if (m_isStateVar)
+		global << appendVarDeclToOutput(type, varName, getQualifier(_type));
+	else
+		local << appendVarDeclToOutput(type, varName, getQualifier(_type));
+
+	// TODO: variable definition and checks
+	pair<string, string> assignCheckStrPair = AssignCheckVisitor(
+		m_varCounter - 1,
+		m_isStateVar
+		)
+		.visit(_type);
+
+	m_checks << assignCheckStrPair.second;
+
+	// State variables cannot be assigned in contract-scope
+	// Therefore, we buffer their assignments and
+	// render them in function scope later.
+	m_local << assignCheckStrPair.first;
+
+	// Add typed params for calling public and external functions with said type
+	appendTypedParams(
+		CalleeType::PUBLIC,
+		isValueType(_type),
+		type,
+		paramName,
+		((m_varCounter == 1) ? Delimiter::SKIP : Delimiter::ADD)
+	);
+	appendTypedParams(
+		CalleeType::EXTERNAL,
+		isValueType(_type),
+		type,
+		paramName,
+		((m_varCounter == 1) ? Delimiter::SKIP : Delimiter::ADD)
+	);
+}
 //
 //void ProtoConverter::addVarDef(std::string const& _varName, std::string const& _rhs)
 //{
@@ -78,13 +137,13 @@ using namespace dev::test::abiv2fuzzer;
 //	// Therefore, we buffer their assignments and
 //	// render them in function scope later.
 //	if (m_isStateVar)
-//		m_statebuffer << varDefString;
+//		m_local << varDefString;
 //	else
 //		m_output << varDefString;
 //}
 //
 //void ProtoConverter::addCheckedVarDef(
-//	DataType _type,
+//	ComparisonBuiltIn _type,
 //	std::string const& _varName,
 //	std::string const& _paramName,
 //	std::string const& _rhs)
@@ -96,7 +155,7 @@ using namespace dev::test::abiv2fuzzer;
 //// Runtime check for array length.
 //void ProtoConverter::checkResizeOp(std::string const& _paramName, unsigned _len)
 //{
-//	appendChecks(DataType::VALUE, _paramName + ".length", std::to_string(_len));
+//	appendChecks(ComparisonBuiltIn::VALUE, _paramName + ".length", std::to_string(_len));
 //}
 
 //string ProtoConverter::arrayDimInfoAsString(ArrayDimensionInfo const& _x)
@@ -152,7 +211,7 @@ using namespace dev::test::abiv2fuzzer;
 //	}
 //}
 
-//ProtoConverter::DataType ProtoConverter::getDataTypeByBaseType(ArrayType const& _x)
+//ProtoConverter::ComparisonBuiltIn ProtoConverter::getDataTypeByBaseType(ArrayType const& _x)
 //{
 //	switch (_x.base_type_oneof_case())
 //	{
@@ -160,7 +219,7 @@ using namespace dev::test::abiv2fuzzer;
 //	case ArrayType::kByty:
 //	case ArrayType::kAdty:
 //	case ArrayType::kBoolty:
-//		return DataType::VALUE;
+//		return ComparisonBuiltIn::VALUE;
 //	case ArrayType::kDynbytesty:
 //		return getDataTypeOfDynBytesType(_x.dynbytesty());
 //	case ArrayType::kStty:
@@ -233,7 +292,7 @@ using namespace dev::test::abiv2fuzzer;
 //		// value is a value of base type
 //		std::string value = getValueByBaseType(_x);
 //		// add assignment and check
-//		DataType dataType = getDataTypeByBaseType(_x);
+//		ComparisonBuiltIn dataType = getDataTypeByBaseType(_x);
 //		addCheckedVarDef(dataType, _varName, _paramName, value);
 //	}
 //	else
@@ -338,14 +397,8 @@ void ProtoConverter::visit(VarDecl const& _x)
 	// For types except struct, this prints the
 	// type string to stream.
 	// For structs, this prints struct definitions.
-	string varDecl = Whiskers(R"(<type> x_<i>;)")
-		("type", TypeVisitor().visit(_x.type()))
-		("i", to_string(m_varCounter++))
-		.render();
-	m_output << varDecl << endl;
-	pair<string, string> assignCheckStrPair = AssignCheckVisitor(0, m_isStateVar).visit(_x.type());
-	cout << assignCheckStrPair.first << endl;
-	cout << assignCheckStrPair.second << endl;
+	visit(_x.type());
+
 	// TODO: If _x.type() is a struct, then
 	// we must create a vardecl of the outer most
 	// struct type S0.
@@ -458,155 +511,156 @@ std::string ProtoConverter::typedParametersAsString(CalleeType _calleeType)
 }
 
 /// Test function to be called externally.
-//void ProtoConverter::visit(TestFunction const& _x)
-//{
-//	m_output << R"(
-//
-//	function test() public returns (uint) {
-//	)";
-//
-//	// Define state variables in function scope
-//	m_output << m_statebuffer.str();
-//
-//	// TODO: Support more than one but less than N local variables
-//	visit(_x.local_vars());
-//
-//	m_output << Whiskers(R"(
-//		uint returnVal = this.coder_public(<parameterNames>);
-//		if (returnVal != 0)
-//			return returnVal;
-//
-//		returnVal = this.coder_external(<parameterNames>);
-//		if (returnVal != 0)
-//			return uint(200000) + returnVal;
-//
-//		<?atLeastOneVar>
-//		bytes memory argumentEncoding = abi.encode(<parameterNames>);
-//
-//		returnVal = checkEncodedCall(
-//			this.coder_public.selector,
-//			argumentEncoding,
-//			<invalidLengthFuzz>,
-//			<isRightPadded>
-//		);
-//		if (returnVal != 0)
-//			return returnVal;
-//
-//		returnVal = checkEncodedCall(
-//			this.coder_external.selector,
-//			argumentEncoding,
-//			<invalidLengthFuzz>,
-//			<isRightPadded>
-//		);
-//		if (returnVal != 0)
-//			return uint(200000) + returnVal;
-//		</atLeastOneVar>
-//		return 0;
-//	}
-//	)")
-//	("parameterNames", dev::suffixedVariableNameList(s_varNamePrefix, 0, m_varCounter))
-//	("invalidLengthFuzz", std::to_string(_x.invalid_encoding_length()))
-//	("isRightPadded", isLastDynParamRightPadded() ? "true" : "false")
-//	("atLeastOneVar", m_varCounter > 0)
-//	.render();
-//}
-//
-//void ProtoConverter::writeHelperFunctions()
-//{
-//	m_output << R"(
-//	function bytesCompare(bytes memory a, bytes memory b) internal pure returns (bool) {
-//		if(a.length != b.length)
-//			return false;
-//		for (uint i = 0; i < a.length; i++)
-//			if (a[i] != b[i])
-//				return false;
-//		return true;
-//	}
-//
-//	/// Accepts function selector, correct argument encoding, and length of
-//	/// invalid encoding and returns the correct and incorrect abi encoding
-//	/// for calling the function specified by the function selector.
-//	function createEncoding(
-//		bytes4 funcSelector,
-//		bytes memory argumentEncoding,
-//		uint invalidLengthFuzz,
-//		bool isRightPadded
-//	) internal pure returns (bytes memory, bytes memory)
-//	{
-//		bytes memory validEncoding = new bytes(4 + argumentEncoding.length);
-//		// Ensure that invalidEncoding crops at least 32 bytes (padding length
-//		// is at most 31 bytes) if `isRightPadded` is true.
-//		// This is because shorter bytes/string values (whose encoding is right
-//		// padded) can lead to successful decoding when fewer than 32 bytes have
-//		// been cropped in the worst case. In other words, if `isRightPadded` is
-//		// true, then
-//		//  0 <= invalidLength <= argumentEncoding.length - 32
-//		// otherwise
-//		//  0 <= invalidLength <= argumentEncoding.length - 1
-//		uint invalidLength;
-//		if (isRightPadded)
-//			invalidLength = invalidLengthFuzz % (argumentEncoding.length - 31);
-//		else
-//			invalidLength = invalidLengthFuzz % argumentEncoding.length;
-//		bytes memory invalidEncoding = new bytes(4 + invalidLength);
-//		for (uint i = 0; i < 4; i++)
-//			validEncoding[i] = invalidEncoding[i] = funcSelector[i];
-//		for (uint i = 0; i < argumentEncoding.length; i++)
-//			validEncoding[i+4] = argumentEncoding[i];
-//		for (uint i = 0; i < invalidLength; i++)
-//			invalidEncoding[i+4] = argumentEncoding[i];
-//		return (validEncoding, invalidEncoding);
-//	}
-//
-//	/// Accepts function selector, correct argument encoding, and an invalid
-//	/// encoding length as input. Returns a non-zero value if either call with
-//	/// correct encoding fails or call with incorrect encoding succeeds.
-//	/// Returns zero if both calls meet expectation.
-//	function checkEncodedCall(
-//		bytes4 funcSelector,
-//		bytes memory argumentEncoding,
-//		uint invalidLengthFuzz,
-//		bool isRightPadded
-//	) public returns (uint)
-//	{
-//		(bytes memory validEncoding, bytes memory invalidEncoding) = createEncoding(
-//			funcSelector,
-//			argumentEncoding,
-//			invalidLengthFuzz,
-//			isRightPadded
-//		);
-//		(bool success, bytes memory returnVal) = address(this).call(validEncoding);
-//		uint returnCode = abi.decode(returnVal, (uint));
-//		// Return non-zero value if call fails for correct encoding
-//		if (success == false || returnCode != 0)
-//			return 400000;
-//		(success, ) = address(this).call(invalidEncoding);
-//		// Return non-zero value if call succeeds for incorrect encoding
-//		if (success == true)
-//			return 400001;
-//		return 0;
-//	}
-//	)";
-//
-//	// These are callee functions that encode from storage, decode to
-//	// memory/calldata and check if decoded value matches storage value
-//	// return true on successful match, false otherwise
-//	m_output << Whiskers(R"(
-//	function coder_public(<parameters_memory>) public pure returns (uint) {
-//		<equality_checks>
-//		return 0;
-//	}
-//
-//	function coder_external(<parameters_calldata>) external pure returns (uint) {
-//		<equality_checks>
-//		return 0;
-//	}
-//	)")
-//	("parameters_memory", typedParametersAsString(CalleeType::PUBLIC))
-//	("equality_checks", equalityChecksAsString())
-//	("parameters_calldata", typedParametersAsString(CalleeType::EXTERNAL))
-//	.render();
-//}
+void ProtoConverter::visit(TestFunction const& _x)
+{
+	m_output << R"(
+	function test() public returns (uint) {)"
+		<< endl;
+
+	// Define state variables in function scope
+//	m_output << m_local.str();
+
+	// TODO: Support more than one but less than N local variables
+	visit(_x.local_vars());
+
+	m_local << Whiskers(R"(
+		uint returnVal = this.coder_public(<parameterNames>);
+		if (returnVal != 0)
+			return returnVal;
+
+		returnVal = this.coder_external(<parameterNames>);
+		if (returnVal != 0)
+			return uint(200000) + returnVal;
+
+		<?atLeastOneVar>
+		bytes memory argumentEncoding = abi.encode(<parameterNames>);
+
+		returnVal = checkEncodedCall(
+			this.coder_public.selector,
+			argumentEncoding,
+			<invalidLengthFuzz>,
+			<isRightPadded>
+		);
+		if (returnVal != 0)
+			return returnVal;
+
+		returnVal = checkEncodedCall(
+			this.coder_external.selector,
+			argumentEncoding,
+			<invalidLengthFuzz>,
+			<isRightPadded>
+		);
+		if (returnVal != 0)
+			return uint(200000) + returnVal;
+		</atLeastOneVar>
+		return 0;
+	}
+	)")
+	("parameterNames", dev::suffixedVariableNameList(s_varNamePrefix, 0, m_varCounter))
+	("invalidLengthFuzz", std::to_string(_x.invalid_encoding_length()))
+	("isRightPadded", isLastDynParamRightPadded() ? "true" : "false")
+	("atLeastOneVar", m_varCounter > 0)
+	.render();
+}
+
+string ProtoConverter::writeHelperFunctions()
+{
+	stringstream helperFuncs;
+	helperFuncs << R"(
+	function bytesCompare(bytes memory a, bytes memory b) internal pure returns (bool) {
+		if(a.length != b.length)
+			return false;
+		for (uint i = 0; i < a.length; i++)
+			if (a[i] != b[i])
+				return false;
+		return true;
+	}
+
+	/// Accepts function selector, correct argument encoding, and length of
+	/// invalid encoding and returns the correct and incorrect abi encoding
+	/// for calling the function specified by the function selector.
+	function createEncoding(
+		bytes4 funcSelector,
+		bytes memory argumentEncoding,
+		uint invalidLengthFuzz,
+		bool isRightPadded
+	) internal pure returns (bytes memory, bytes memory)
+	{
+		bytes memory validEncoding = new bytes(4 + argumentEncoding.length);
+		// Ensure that invalidEncoding crops at least 32 bytes (padding length
+		// is at most 31 bytes) if `isRightPadded` is true.
+		// This is because shorter bytes/string values (whose encoding is right
+		// padded) can lead to successful decoding when fewer than 32 bytes have
+		// been cropped in the worst case. In other words, if `isRightPadded` is
+		// true, then
+		//  0 <= invalidLength <= argumentEncoding.length - 32
+		// otherwise
+		//  0 <= invalidLength <= argumentEncoding.length - 1
+		uint invalidLength;
+		if (isRightPadded)
+			invalidLength = invalidLengthFuzz % (argumentEncoding.length - 31);
+		else
+			invalidLength = invalidLengthFuzz % argumentEncoding.length;
+		bytes memory invalidEncoding = new bytes(4 + invalidLength);
+		for (uint i = 0; i < 4; i++)
+			validEncoding[i] = invalidEncoding[i] = funcSelector[i];
+		for (uint i = 0; i < argumentEncoding.length; i++)
+			validEncoding[i+4] = argumentEncoding[i];
+		for (uint i = 0; i < invalidLength; i++)
+			invalidEncoding[i+4] = argumentEncoding[i];
+		return (validEncoding, invalidEncoding);
+	}
+
+	/// Accepts function selector, correct argument encoding, and an invalid
+	/// encoding length as input. Returns a non-zero value if either call with
+	/// correct encoding fails or call with incorrect encoding succeeds.
+	/// Returns zero if both calls meet expectation.
+	function checkEncodedCall(
+		bytes4 funcSelector,
+		bytes memory argumentEncoding,
+		uint invalidLengthFuzz,
+		bool isRightPadded
+	) public returns (uint)
+	{
+		(bytes memory validEncoding, bytes memory invalidEncoding) = createEncoding(
+			funcSelector,
+			argumentEncoding,
+			invalidLengthFuzz,
+			isRightPadded
+		);
+		(bool success, bytes memory returnVal) = address(this).call(validEncoding);
+		uint returnCode = abi.decode(returnVal, (uint));
+		// Return non-zero value if call fails for correct encoding
+		if (success == false || returnCode != 0)
+			return 400000;
+		(success, ) = address(this).call(invalidEncoding);
+		// Return non-zero value if call succeeds for incorrect encoding
+		if (success == true)
+			return 400001;
+		return 0;
+	}
+	)";
+
+	// These are callee functions that encode from storage, decode to
+	// memory/calldata and check if decoded value matches storage value
+	// return true on successful match, false otherwise
+	helperFuncs << Whiskers(R"(
+	function coder_public(<parameters_memory>) public pure returns (uint) {
+<equality_checks>
+		return 0;
+	}
+
+	function coder_external(<parameters_calldata>) external pure returns (uint) {
+<equality_checks>
+		return 0;
+	}
+	)")
+	("parameters_memory", typedParametersAsString(CalleeType::PUBLIC))
+	("equality_checks", equalityChecksAsString())
+	("parameters_calldata", typedParametersAsString(CalleeType::EXTERNAL))
+	.render();
+	return helperFuncs.str();
+}
 
 void ProtoConverter::visit(Contract const& _x)
 {
@@ -619,11 +673,10 @@ contract C {
 	visit(_x.state_vars());
 	m_isStateVar = false;
 	// Test function
-//	visit(_x.testfunction());
-//	writeHelperFunctions();
-	m_output << "function test() public returns (uint) { return 0; }";
-
-	m_output << "\n}";
+	// TODO: Uncomment this
+	visit(_x.testfunction());
+	m_local << writeHelperFunctions();
+	m_local << "\n}";
 }
 
 string ProtoConverter::contractToString(Contract const& _input)
@@ -675,7 +728,13 @@ string TypeVisitor::visit(DynamicByteArrayType const& _type)
 	return bytesArrayTypeAsString(_type);
 }
 
-string TypeVisitor::visit(StructType const& _type)
+string TypeVisitor::visit(StructType const&)
+{
+	return s_structTypeName + to_string(m_structSuffix);
+}
+
+/// StructDeclVisitor implementation
+string StructDeclVisitor::visit(StructType const& _type)
 {
 	string structDecl = lineString("struct S" + to_string(m_structCounter++) + " {");
 	m_indentation++;
@@ -684,7 +743,7 @@ string TypeVisitor::visit(StructType const& _type)
 		string type;
 		if (t.has_nvtype() && t.nvtype().has_stype())
 		{
-			m_type << TypeVisitor{m_structCounter}.visit(t.nvtype().stype());
+			m_type << StructDeclVisitor{m_structCounter}.visit(t.nvtype().stype());
 			type = "S" + to_string(m_structCounter);
 		}
 		else
@@ -692,7 +751,7 @@ string TypeVisitor::visit(StructType const& _type)
 		structDecl += lineString(
 			Whiskers(R"(<type> <member>;)")
 				("type", type)
-				("member", "m" + to_string(m_structMemberCounter++))
+				("member", "m" + to_string(m_structFieldCounter++))
 				.render()
 		);
 	}
@@ -759,7 +818,7 @@ pair<string, string> AssignCheckVisitor::visit(DynamicByteArrayType const& _type
 //	checkString(
 //		m_paramName + t.m_array + ".length",
 //		arrayDimensionSize,
-//		DataType::VALUE
+//		ComparisonBuiltIn::VALUE
 //	);
 //
 //
@@ -769,7 +828,7 @@ pair<string, string> AssignCheckVisitor::visit(DynamicByteArrayType const& _type
 //			m_varName + ".length",
 //			m_paramName + ".length",
 //			length,
-//			DataType::ARRAY
+//			ComparisonBuiltIn::ARRAY
 //		);
 //	else
 //	{
@@ -788,7 +847,7 @@ pair<string, string> AssignCheckVisitor::visit(DynamicByteArrayType const& _type
 //	bool isBytes = _type.type() == DynamicByteArrayType::BYTES;
 //	string value = bytesArrayValueAsString(counter(), isBytes);
 //	assignString(m_varName, value);
-//	checkString(m_paramName, value, DataType::VALUE);
+//	checkString(m_paramName, value, ComparisonBuiltIn::VALUE);
 //	// Update right padding of type
 //	m_isLastDynParamRightPadded = true;
 //	return true;
@@ -853,7 +912,7 @@ string AssignCheckVisitor::checkString(string const& _ref, string const& _value,
 	}
 	string checkStmt = Whiskers(R"(if (<checkPred>) return <errCode>;)")
 		("checkPred", checkPred)
-		("errCode", to_string(m_errorCode++))
+		("errCode", to_string(++m_errorCode))
 		.render();
 	return indentation() + checkStmt + "\n";
 }
