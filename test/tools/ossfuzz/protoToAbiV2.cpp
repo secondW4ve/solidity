@@ -105,7 +105,7 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 	// State variables cannot be assigned in contract-scope
 	// Therefore, we buffer their assignments and
 	// render them in function scope later.
-	m_local << assignCheckStrPair.first;
+	local << assignCheckStrPair.first;
 
 	// Add typed params for calling public and external functions with said type
 	appendTypedParams(
@@ -122,6 +122,7 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 		paramName,
 		((m_varCounter == 1) ? Delimiter::SKIP : Delimiter::ADD)
 	);
+	return make_pair(global.str(), local.str());
 }
 //
 //void ProtoConverter::addVarDef(std::string const& _varName, std::string const& _rhs)
@@ -392,12 +393,12 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 //	visitArrayType(baseType, _x);
 //}
 
-void ProtoConverter::visit(VarDecl const& _x)
+pair<string, string> ProtoConverter::visit(VarDecl const& _x)
 {
 	// For types except struct, this prints the
 	// type string to stream.
 	// For structs, this prints struct definitions.
-	visit(_x.type());
+	return visit(_x.type());
 
 	// TODO: If _x.type() is a struct, then
 	// we must create a vardecl of the outer most
@@ -511,19 +512,28 @@ std::string ProtoConverter::typedParametersAsString(CalleeType _calleeType)
 }
 
 /// Test function to be called externally.
-void ProtoConverter::visit(TestFunction const& _x)
+pair<string, string> ProtoConverter::visit(TestFunction const& _x)
 {
-	m_output << R"(
-	function test() public returns (uint) {)"
-		<< endl;
-
-	// Define state variables in function scope
-//	m_output << m_local.str();
-
+	ostringstream global, local;
 	// TODO: Support more than one but less than N local variables
-	visit(_x.local_vars());
+	auto localVarBuffers = visit(_x.local_vars());
 
-	m_local << Whiskers(R"(
+	global << localVarBuffers.first;
+	global << R"(
+	function test() public returns (uint) {)"
+	       << endl;
+
+	global << localVarBuffers.second;
+	global << testCode(_x.invalid_encoding_length());
+	global << R"(
+	})" <<
+		endl;
+	return make_pair(global.str(), local.str());
+}
+
+string ProtoConverter::testCode(unsigned _invalidLength)
+{
+	return Whiskers(R"(
 		uint returnVal = this.coder_public(<parameterNames>);
 		if (returnVal != 0)
 			return returnVal;
@@ -554,16 +564,15 @@ void ProtoConverter::visit(TestFunction const& _x)
 			return uint(200000) + returnVal;
 		</atLeastOneVar>
 		return 0;
-	}
 	)")
-	("parameterNames", dev::suffixedVariableNameList(s_varNamePrefix, 0, m_varCounter))
-	("invalidLengthFuzz", std::to_string(_x.invalid_encoding_length()))
-	("isRightPadded", isLastDynParamRightPadded() ? "true" : "false")
-	("atLeastOneVar", m_varCounter > 0)
-	.render();
+		("parameterNames", dev::suffixedVariableNameList(s_varNamePrefix, 0, m_varCounter))
+		("invalidLengthFuzz", std::to_string(_invalidLength))
+		("isRightPadded", isLastDynParamRightPadded() ? "true" : "false")
+		("atLeastOneVar", m_varCounter > 0)
+		.render();
 }
 
-string ProtoConverter::writeHelperFunctions()
+string ProtoConverter::helperFunctions()
 {
 	stringstream helperFuncs;
 	helperFuncs << R"(
@@ -664,19 +673,35 @@ string ProtoConverter::writeHelperFunctions()
 
 void ProtoConverter::visit(Contract const& _x)
 {
-	m_output << R"(pragma solidity >=0.0;
-pragma experimental ABIEncoderV2;
+	string pragmas = R"(pragma solidity >=0.0;
+pragma experimental ABIEncoderV2;)";
 
-contract C {
-)";
 	// TODO: Support more than one but less than N state variables
-	visit(_x.state_vars());
+	auto stateBuffers = visit(_x.state_vars());
 	m_isStateVar = false;
-	// Test function
-	// TODO: Uncomment this
-	visit(_x.testfunction());
-	m_local << writeHelperFunctions();
-	m_local << "\n}";
+	auto localBuffers = visit(_x.testfunction());
+	ostringstream contractBody;
+	/*
+	 * Storage variable declarations
+	 * Struct type declarations
+	 * Storage variable definitions
+	 * Local variable definitions
+	 * Helper functions
+	 */
+
+	contractBody << stateBuffers.first
+		<< localBuffers.first
+		<< stateBuffers.second
+		<< helperFunctions();
+	m_output << Whiskers(R"(<pragmas>
+<contractStart>
+<contractBody>
+<contractEnd>)")
+		("pragmas", pragmas)
+		("contractStart", "contract C {")
+		("contractBody", contractBody.str())
+		("contractEnd", "}")
+		.render();
 }
 
 string ProtoConverter::contractToString(Contract const& _input)

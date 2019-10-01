@@ -134,10 +134,10 @@ private:
 		VALUE
 	};
 
-	void visit(VarDecl const&);
-	void visit(TestFunction const&);
+	std::pair<std::string, std::string> visit(VarDecl const&);
+	std::pair<std::string, std::string> visit(TestFunction const&);
 	void visit(Contract const&);
-	std::string visit(Type const&);
+	std::pair<std::string, std::string> visit(Type const&);
 
 	// Utility functions
 	void appendChecks(ComparisonBuiltIn _type, std::string const& _varName, std::string const& _rhs);
@@ -179,8 +179,6 @@ private:
 		std::string const& _qualifier
 	);
 
-	std::string visitType(Type const& _type);
-
 	void checkResizeOp(std::string const& _varName, unsigned _len);
 
 	void createDeclAndParamList(
@@ -194,7 +192,9 @@ private:
 
 	std::string typedParametersAsString(CalleeType _calleeType);
 
-	std::string writeHelperFunctions();
+	std::string helperFunctions();
+
+	std::string testCode(unsigned _invalidLength);
 
 	// Function definitions
 	// m_counter is used to derive values for typed variables
