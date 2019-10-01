@@ -395,29 +395,7 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 
 pair<string, string> ProtoConverter::visit(VarDecl const& _x)
 {
-	// For types except struct, this prints the
-	// type string to stream.
-	// For structs, this prints struct definitions.
 	return visit(_x.type());
-
-	// TODO: If _x.type() is a struct, then
-	// we must create a vardecl of the outer most
-	// struct type S0.
-	//	if (_x.type().has_nvtype() && _x.type().nvtype().has_stype())
-
-	// TODO: If vardecl not in storage and is of
-	// non-value type, then set location to memory
-	// TODO: If vardecl is of non value type, then
-	// set parameter location as "memory" and
-	// "calldata" for the public and external
-	// functions respectively.
-
-	// if (m_isStorage) don't add location
-	// else add location according to type
-	// createVarDecl(typeStream, location, varSuffix);
-	// AssignmentVisitor{_x.type()}.print(assignStream);
-	// createAssignment(assignStream);
-//	visit(_x.type());
 }
 
 std::string ProtoConverter::equalityChecksAsString()
@@ -512,23 +490,28 @@ std::string ProtoConverter::typedParametersAsString(CalleeType _calleeType)
 }
 
 /// Test function to be called externally.
-pair<string, string> ProtoConverter::visit(TestFunction const& _x)
+string ProtoConverter::visit(TestFunction const& _x, string const& _storageVarDefs)
 {
-	ostringstream global, local;
 	// TODO: Support more than one but less than N local variables
 	auto localVarBuffers = visit(_x.local_vars());
+	string structTypeDecl = localVarBuffers.first;
+	string localVarDefs = localVarBuffers.second;
 
-	global << localVarBuffers.first;
-	global << R"(
-	function test() public returns (uint) {)"
-	       << endl;
-
-	global << localVarBuffers.second;
-	global << testCode(_x.invalid_encoding_length());
-	global << R"(
-	})" <<
-		endl;
-	return make_pair(global.str(), local.str());
+	ostringstream testBuffer;
+	string functionDecl = "function test() public returns (uint)";
+	testBuffer << Whiskers(R"(<structTypeDecl>
+	<functionDecl> {
+<storageVarDefs>
+<localVarDefs>
+<testCode>
+	})")
+		("structTypeDecl", structTypeDecl)
+		("functionDecl", functionDecl)
+		("storageVarDefs", _storageVarDefs)
+		("localVarDefs", localVarDefs)
+		("testCode", testCode(_x.invalid_encoding_length()))
+		.render();
+	return testBuffer.str();
 }
 
 string ProtoConverter::testCode(unsigned _invalidLength)
@@ -564,7 +547,7 @@ string ProtoConverter::testCode(unsigned _invalidLength)
 			return uint(200000) + returnVal;
 		</atLeastOneVar>
 		return 0;
-	)")
+		)")
 		("parameterNames", dev::suffixedVariableNameList(s_varNamePrefix, 0, m_varCounter))
 		("invalidLengthFuzz", std::to_string(_invalidLength))
 		("isRightPadded", isLastDynParamRightPadded() ? "true" : "false")
@@ -677,22 +660,25 @@ void ProtoConverter::visit(Contract const& _x)
 pragma experimental ABIEncoderV2;)";
 
 	// TODO: Support more than one but less than N state variables
-	auto stateBuffers = visit(_x.state_vars());
+	auto storageBuffers = visit(_x.state_vars());
+	string storageVarDecls = storageBuffers.first;
+	string storageVarDefs = storageBuffers.second;
 	m_isStateVar = false;
-	auto localBuffers = visit(_x.testfunction());
+	string testFunction = visit(_x.testfunction(), storageVarDefs);
 	ostringstream contractBody;
-	/*
-	 * Storage variable declarations
-	 * Struct type declarations
-	 * Storage variable definitions
-	 * Local variable definitions
-	 * Helper functions
-	 */
 
-	contractBody << stateBuffers.first
-		<< localBuffers.first
-		<< stateBuffers.second
-		<< helperFunctions();
+	/* Structure of contract body
+	 * - Storage variable declarations
+	 * - Struct type declarations
+	 * - Test function
+     *     - Storage variable definitions
+	 *     - Local variable definitions
+	 *     - Test code proper (calls public and external functions)
+	 * - Helper functions
+	 */
+	contractBody << storageVarDecls
+	             << testFunction
+	             << helperFunctions();
 	m_output << Whiskers(R"(<pragmas>
 <contractStart>
 <contractBody>

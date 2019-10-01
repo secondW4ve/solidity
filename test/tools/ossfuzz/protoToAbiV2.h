@@ -135,7 +135,7 @@ private:
 	};
 
 	std::pair<std::string, std::string> visit(VarDecl const&);
-	std::pair<std::string, std::string> visit(TestFunction const&);
+	std::string visit(TestFunction const&, std::string const&);
 	void visit(Contract const&);
 	std::pair<std::string, std::string> visit(Type const&);
 
@@ -311,9 +311,6 @@ private:
 
 	/// Contains the test program
 	std::ostringstream m_output;
-	/// Temporary storage for state variable definitions
-	std::ostringstream m_local;
-	std::ostringstream m_global;
 	/// Contains a subset of the test program. This subset contains
 	/// checks to be encoded in the test program
 	std::ostringstream m_checks;
