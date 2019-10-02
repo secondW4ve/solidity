@@ -1,6 +1,4 @@
 #include <regex>
-#include <numeric>
-#include <boost/range/adaptor/reversed.hpp>
 #include <test/tools/ossfuzz/protoToAbiV2.h>
 #include <libdevcore/StringUtils.h>
 #include <libdevcore/Whiskers.h>
@@ -85,7 +83,9 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 		m_structCounter = structStartSuffix + sVisitor.numStructs();
 	}
 
-	string type = TypeVisitor(structStartSuffix).visit(_type);
+	TypeVisitor tVisitor(structStartSuffix);
+	string type = tVisitor.visit(_type);
+	m_isLastDynParamRightPadded = tVisitor.isLastDynParamRightPadded();
 
 	// variable declaration
 	if (m_isStateVar)
@@ -93,7 +93,6 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 	else
 		local << appendVarDeclToOutput(type, varName, getQualifier(_type));
 
-	// TODO: variable definition and checks
 	AssignCheckVisitor acVisitor(
 		varName,
 		paramName,
@@ -466,19 +465,21 @@ string TypeVisitor::visit(ArrayType const& _type)
 	// inner most.
 	// Example: 2,3,4 (all statically sized) will print
 	// x[4][3][2]
+	if (!_type.is_static())
+		m_isLastDynParamRightPadded = true;
 	string baseType = visit(_type.t());
 	string arrayBraces = _type.is_static() ?
 		string("[") +
 		to_string(getStaticArrayLengthFromFuzz(_type.length())) +
 		string("]") :
 		string("[]");
-	m_arrayParens.push_back(arrayBraces);
 	m_baseType += arrayBraces;
 	return baseType + arrayBraces;
 }
 
 string TypeVisitor::visit(DynamicByteArrayType const& _type)
 {
+	m_isLastDynParamRightPadded = true;
 	m_baseType = bytesArrayTypeAsString(_type);
 	return m_baseType;
 }
@@ -550,7 +551,10 @@ pair<string, string> AssignCheckVisitor::visit(AddressType const& _type)
 pair<string, string> AssignCheckVisitor::visit(DynamicByteArrayType const& _type)
 {
 	string value = ValueGetterVisitor(counter()).visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::BYTES);
+	DataType dataType = _type.type() == DynamicByteArrayType::BYTES ?
+		DataType::BYTES :
+		DataType::STRING;
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, dataType);
 }
 
 Type const& AssignCheckVisitor::getBaseType(ArrayType const& _type)
@@ -561,16 +565,6 @@ Type const& AssignCheckVisitor::getBaseType(ArrayType const& _type)
 		return getBaseType(bType.nvtype().arrtype());
 	}
 	return bType;
-}
-
-string AssignCheckVisitor::concatFirstN(vector<string> const& _vec, unsigned _n)
-{
-	solAssert(_n <= _vec.size(), "ABIv2 proto fuzzer: Invalid concatenation op");
-
-	string s;
-	for (auto it = _vec.begin(); it < _vec.begin() + _n; it++)
-		s += *it;
-	return s;
 }
 
 pair<string, string> AssignCheckVisitor::visit(ArrayType const& _type)
@@ -716,7 +710,7 @@ string AssignCheckVisitor::checkString(string const& _ref, string const& _value,
 	}
 	string checkStmt = Whiskers(R"(if (<checkPred>) return <errCode>;)")
 		("checkPred", checkPred)
-		("errCode", to_string(++m_errorCode))
+		("errCode", to_string(m_errorCode++))
 		.render();
 	return indentation() + checkStmt + "\n";
 }

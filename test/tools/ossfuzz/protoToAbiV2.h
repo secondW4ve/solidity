@@ -115,8 +115,6 @@ public:
 	ProtoConverter(ProtoConverter&&) = delete;
 	std::string contractToString(Contract const& _input);
 private:
-	using VecOfBoolUnsigned = std::vector<std::pair<bool, unsigned>>;
-
 	enum class Delimiter
 	{
 		ADD,
@@ -127,30 +125,12 @@ private:
 		PUBLIC,
 		EXTERNAL
 	};
-	enum class ComparisonBuiltIn
-	{
-		BYTES,
-		STRING,
-		VALUE
-	};
-
 	std::pair<std::string, std::string> visit(VarDecl const&);
 	std::string visit(TestFunction const&, std::string const&);
 	void visit(Contract const&);
 	std::pair<std::string, std::string> visit(Type const&);
 
 	// Utility functions
-	void appendChecks(ComparisonBuiltIn _type, std::string const& _varName, std::string const& _rhs);
-
-	void addVarDef(std::string const& _varName, std::string const& _rhs);
-
-	void addCheckedVarDef(
-		ComparisonBuiltIn _type,
-		std::string const& _varName,
-		std::string const& _paramName,
-		std::string const& _rhs
-	);
-
 	void appendTypedParams(
 		CalleeType _calleeType,
 		bool _isValueType,
@@ -179,15 +159,6 @@ private:
 		std::string const& _qualifier
 	);
 
-	void checkResizeOp(std::string const& _varName, unsigned _len);
-
-	void createDeclAndParamList(
-		std::string const& _type,
-		ComparisonBuiltIn _dataType,
-		std::string& _varName,
-		std::string& _paramName
-	);
-
 	std::string equalityChecksAsString();
 
 	std::string typedParametersAsString(CalleeType _calleeType);
@@ -197,12 +168,6 @@ private:
 	std::string testCode(unsigned _invalidLength);
 
 	// Function definitions
-	// m_counter is used to derive values for typed variables
-	unsigned getNextCounter()
-	{
-		return m_counter++;
-	}
-
 	// m_varCounter is used to derive declared and parameterized variable names
 	unsigned getNextVarCounter()
 	{
@@ -223,11 +188,6 @@ private:
 		);
 	}
 
-	std::string getQualifier(ComparisonBuiltIn _dataType)
-	{
-		return ((isValueType(_dataType) || m_isStateVar) ? "" : "memory");
-	}
-
 	std::string getQualifier(Type const& _type);
 
 	bool isLastDynParamRightPadded()
@@ -236,25 +196,9 @@ private:
 	}
 
 	static std::string delimiterToString(Delimiter _delimiter);
-
-	// Static function definitions
-	static bool isValueType(ComparisonBuiltIn _dataType)
-	{
-		return _dataType == ComparisonBuiltIn::VALUE;
-	}
-
 	static bool isValueType(Type const& _type);
 
-	static unsigned getIntWidth(IntegerType const& _x)
-	{
-		return 8 * ((_x.width() % 32) + 1);
-	}
-
-	static bool isIntSigned(IntegerType const& _x)
-	{
-		return _x.is_signed();
-	}
-
+	// Static function definitions
 	// Convert _counter to string and return its keccak256 hash
 	static u256 hashUnsignedInt(unsigned _counter)
 	{
@@ -264,49 +208,6 @@ private:
 	static u256 maskUnsignedInt(unsigned _counter, unsigned _numMaskNibbles)
 	{
 		return hashUnsignedInt(_counter) & u256("0x" + std::string(_numMaskNibbles, 'f'));
-	}
-
-	// Requires caller to pass number of nibbles (twice the number of bytes) as second argument.
-	// Note: Don't change HexPrefix::Add. See comment in fixedByteValueAsString().
-	static std::string maskUnsignedIntToHex(unsigned _counter, unsigned _numMaskNibbles)
-	{
-		return toHex(maskUnsignedInt(_counter, _numMaskNibbles), HexPrefix::Add);
-	}
-
-	/// Dynamically sized arrays can have a length of at least zero
-	/// and at most s_maxArrayLength.
-	static unsigned getDynArrayLengthFromFuzz(unsigned _fuzz, unsigned _counter)
-	{
-		// Increment modulo value by one in order to meet upper bound
-		return (_fuzz + _counter) % (s_maxArrayLength + 1);
-	}
-
-	/// Statically sized arrays must have a length of at least one
-	/// and at most s_maxArrayLength.
-	static unsigned getStaticArrayLengthFromFuzz(unsigned _fuzz)
-	{
-		return _fuzz % s_maxArrayLength + 1;
-	}
-
-//	static std::pair<bool, unsigned> arrayDimInfoAsPair(ArrayDimensionInfo const& _x)
-//	{
-//		return (
-//			_x.is_static() ?
-//			std::make_pair(true, getStaticArrayLengthFromFuzz(_x.length())) :
-//			std::make_pair(false, getDynArrayLengthFromFuzz(_x.length(), 0))
-//		);
-//	}
-
-	/// Returns a pseudo-random value for the size of a string/hex
-	/// literal. Used for creating variable length hex/string literals.
-	/// @param _counter Monotonically increasing counter value
-	static unsigned getVarLength(unsigned _counter)
-	{
-		// Since _counter values are usually small, we use
-		// this linear equation to make the number derived from
-		// _counter approach a uniform distribution over
-		// [0, s_maxDynArrayLength]
-		return (_counter + 879) * 32 % (s_maxDynArrayLength + 1);
 	}
 
 	/// Contains the test program
@@ -329,9 +230,6 @@ private:
 	bool m_isLastDynParamRightPadded;
 	/// Struct counter
 	unsigned m_structCounter;
-	static unsigned constexpr s_maxArrayLength = 4;
-	static unsigned constexpr s_maxArrayDimensions = 4;
-	static unsigned constexpr s_maxDynArrayLength = 256;
 	/// Prefixes for declared and parameterized variable names
 	static auto constexpr s_varNamePrefix = "x_";
 	static auto constexpr s_paramNamePrefix = "c_";
@@ -384,8 +282,6 @@ public:
 		return _dataType == DataType::VALUE;
 	}
 
-	static DataType dataType(Type const& _type);
-
 	static unsigned getIntWidth(IntegerType const& _x)
 	{
 		return 8 * ((_x.width() % 32) + 1);
@@ -394,11 +290,6 @@ public:
 	static bool isIntSigned(IntegerType const& _x)
 	{
 		return _x.is_signed();
-	}
-
-	static std::string getBoolTypeAsString()
-	{
-		return "bool";
 	}
 
 	static std::string getIntTypeAsString(IntegerType const& _x)
@@ -427,12 +318,6 @@ public:
 			return DataType::STRING;
 		else
 			return DataType::BYTES;
-	}
-
-	/// Returns true if input is either a string or bytes, false otherwise.
-	static bool isDataTypeBytesOrString(DataType _type)
-	{
-		return _type == DataType::STRING || _type == DataType::BYTES;
 	}
 
 	// Convert _counter to string and return its keccak256 hash
@@ -467,15 +352,6 @@ public:
 	{
 		return _fuzz % s_maxArrayLength + 1;
 	}
-
-//	static std::pair<bool, unsigned> arrayDimInfoAsPair(ArrayDimensionInfo const& _x)
-//	{
-//		return (
-//			_x.is_static() ?
-//			std::make_pair(true, getStaticArrayLengthFromFuzz(_x.length())) :
-//			std::make_pair(false, getDynArrayLengthFromFuzz(_x.length(), 0))
-//		);
-//	}
 
 	/// Returns a pseudo-random value for the size of a string/hex
 	/// literal. Used for creating variable length hex/string literals.
@@ -545,17 +421,18 @@ T visitType(Type const& _type)
 }
 private:
 	static unsigned constexpr s_maxArrayLength = 4;
-	static unsigned constexpr s_maxArrayDimensions = 4;
 	static unsigned constexpr s_maxDynArrayLength = 256;
-	static auto constexpr s_varPrefix = "x_";
-	static auto constexpr s_paramPrefix = "c_";
 };
 
 /// Visitor to format solidity types
 class TypeVisitor: public AbiV2ProtoVisitor<std::string>
 {
 public:
-	TypeVisitor(unsigned _structSuffix): m_indentation(1), m_structSuffix(_structSuffix) {}
+	TypeVisitor(unsigned _structSuffix):
+		m_indentation(1),
+		m_structSuffix(_structSuffix),
+		m_isLastDynParamRightPadded(false)
+	{}
 
 	std::string visit(BoolType const&) override;
 	std::string visit(IntegerType const&) override;
@@ -565,13 +442,13 @@ public:
 	std::string visit(DynamicByteArrayType const&) override;
 	std::string visit(StructType const&) override;
 	using AbiV2ProtoVisitor<std::string>::visit;
-	std::vector<std::string> arrayParens()
-	{
-		return m_arrayParens;
-	}
 	std::string baseType()
 	{
 		return m_baseType;
+	}
+	bool isLastDynParamRightPadded()
+	{
+		return m_isLastDynParamRightPadded;
 	}
 
 private:
@@ -595,10 +472,10 @@ private:
 			return false;
 	}
 
-	std::vector<std::string> m_arrayParens;
 	std::string m_baseType;
 	unsigned m_indentation;
 	unsigned m_structSuffix;
+	bool m_isLastDynParamRightPadded;
 
 	static auto constexpr s_structTypeName = "S";
 };
@@ -691,8 +568,6 @@ private:
 	{
 		return m_counter++;
 	}
-
-	std::string concatFirstN(std::vector<std::string> const& _vec, unsigned _n);
 
 	Type const& getBaseType(ArrayType const&);
 
