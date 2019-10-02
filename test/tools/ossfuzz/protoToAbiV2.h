@@ -375,6 +375,8 @@ public:
 	/// Prefixes for declared and parameterized variable names
 	static auto constexpr s_varNamePrefix = "x_";
 	static auto constexpr s_paramNamePrefix = "c_";
+	static auto constexpr s_structNamePrefix = "S";
+	static auto constexpr s_structFieldPrefix = "m";
 
 	// Static function definitions
 	static bool isValueType(DataType _dataType)
@@ -563,6 +565,15 @@ public:
 	std::string visit(DynamicByteArrayType const&) override;
 	std::string visit(StructType const&) override;
 	using AbiV2ProtoVisitor<std::string>::visit;
+	std::vector<std::string> arrayParens()
+	{
+		return m_arrayParens;
+	}
+	std::string baseType()
+	{
+		return m_baseType;
+	}
+
 private:
 	std::string indentation()
 	{
@@ -584,7 +595,8 @@ private:
 			return false;
 	}
 
-	std::ostringstream m_array;
+	std::vector<std::string> m_arrayParens;
+	std::string m_baseType;
 	unsigned m_indentation;
 	unsigned m_structSuffix;
 
@@ -630,14 +642,22 @@ private:
 class AssignCheckVisitor: public AbiV2ProtoVisitor<std::pair<std::string, std::string>>
 {
 public:
-	AssignCheckVisitor(unsigned _suffix, bool _stateVar)
+	AssignCheckVisitor(
+		std::string _varName,
+		std::string _paramName,
+		unsigned _errorStart,
+		bool _stateVar,
+		unsigned _counter,
+		unsigned _structCounter
+	)
 	{
-		m_counter = 0;
-		m_varName = s_varNamePrefix + std::to_string(_suffix);
-		m_paramName = s_paramNamePrefix + std::to_string(_suffix);
-		m_errorCode = _suffix;
+		m_counter = m_counterStart = _counter;
+		m_varName = _varName;
+		m_paramName = _paramName;
+		m_errorCode = m_errorStart = _errorStart;
 		m_indentation = 2;
 		m_stateVar = _stateVar;
+		m_structCounter = m_structStart = _structCounter;
 	}
 	std::pair<std::string, std::string> visit(BoolType const&) override;
 	std::pair<std::string, std::string> visit(IntegerType const&) override;
@@ -647,6 +667,21 @@ public:
 	std::pair<std::string, std::string> visit(DynamicByteArrayType const&) override;
 	std::pair<std::string, std::string> visit(StructType const&) override;
 	using AbiV2ProtoVisitor<std::pair<std::string, std::string>>::visit;
+
+	unsigned errorStmts()
+	{
+		return m_errorCode - m_errorStart;
+	}
+
+	unsigned counted()
+	{
+		return m_counter - m_counterStart;
+	}
+
+	unsigned structs()
+	{
+		return m_structCounter - m_structStart;
+	}
 private:
 	std::string indentation()
 	{
@@ -657,26 +692,35 @@ private:
 		return m_counter++;
 	}
 
+	std::string concatFirstN(std::vector<std::string> const& _vec, unsigned _n);
+
+	Type const& getBaseType(ArrayType const&);
+
 	std::pair<std::string, std::string> assignAndCheckStringPair(
 		std::string const& _varRef,
 		std::string const& _checkRef,
-		std::string const& _value,
+		std::string const& _assignValue,
+		std::string const& _checkValue,
 		DataType _type
 	);
 	std::string assignString(std::string const&, std::string const&);
 	std::string checkString(std::string const&, std::string const&, DataType);
 	unsigned m_counter;
+	unsigned m_counterStart;
 	std::string m_varName;
 	std::string m_paramName;
 	unsigned m_errorCode;
+	unsigned m_errorStart;
 	unsigned m_indentation;
 	bool m_stateVar;
+	unsigned m_structCounter;
+	unsigned m_structStart;
 };
 
 class ValueGetterVisitor: AbiV2ProtoVisitor<std::string>
 {
 public:
-	ValueGetterVisitor(): m_counter(0) {}
+	ValueGetterVisitor(unsigned _counter = 0): m_counter(_counter) {}
 
 	std::string visit(BoolType const&) override;
 	std::string visit(IntegerType const&) override;

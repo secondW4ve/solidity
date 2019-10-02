@@ -94,11 +94,18 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 		local << appendVarDeclToOutput(type, varName, getQualifier(_type));
 
 	// TODO: variable definition and checks
-	pair<string, string> assignCheckStrPair = AssignCheckVisitor(
-		m_varCounter - 1,
-		m_isStateVar
-		)
-		.visit(_type);
+	AssignCheckVisitor acVisitor(
+		varName,
+		paramName,
+		m_returnValue,
+		m_isStateVar,
+		m_counter,
+		m_structCounter
+	);
+	pair<string, string> assignCheckStrPair = acVisitor.visit(_type);
+	m_returnValue += acVisitor.errorStmts();
+	m_counter += acVisitor.counted();
+	m_structCounter += acVisitor.structs();
 
 	m_checks << assignCheckStrPair.second;
 
@@ -124,274 +131,6 @@ pair<string, string> ProtoConverter::visit(Type const& _type)
 	);
 	return make_pair(global.str(), local.str());
 }
-//
-//void ProtoConverter::addVarDef(std::string const& _varName, std::string const& _rhs)
-//{
-//	std::string varDefString = Whiskers(R"(
-//		<varName> = <rhs>;)"
-//		)
-//		("varName", _varName)
-//		("rhs", _rhs)
-//		.render();
-//
-//	// State variables cannot be assigned in contract-scope
-//	// Therefore, we buffer their assignments and
-//	// render them in function scope later.
-//	if (m_isStateVar)
-//		m_local << varDefString;
-//	else
-//		m_output << varDefString;
-//}
-//
-//void ProtoConverter::addCheckedVarDef(
-//	ComparisonBuiltIn _type,
-//	std::string const& _varName,
-//	std::string const& _paramName,
-//	std::string const& _rhs)
-//{
-//	addVarDef(_varName, _rhs);
-//	appendChecks(_type, _paramName, _rhs);
-//}
-//
-//// Runtime check for array length.
-//void ProtoConverter::checkResizeOp(std::string const& _paramName, unsigned _len)
-//{
-//	appendChecks(ComparisonBuiltIn::VALUE, _paramName + ".length", std::to_string(_len));
-//}
-
-//string ProtoConverter::arrayDimInfoAsString(ArrayDimensionInfo const& _x)
-//{
-//	return Whiskers(R"([<?isStatic><length></isStatic>])")
-//		("isStatic", _x.is_static())
-//		("length", std::to_string(getStaticArrayLengthFromFuzz(_x.length())))
-//		.render();
-//}
-
-//void ProtoConverter::arrayDimensionsAsStringVector(
-//	ArrayType const& _x,
-//	std::vector<std::string>& _vecOfStr)
-//{
-//	solAssert(_x.info_size() > 0, "Proto ABIv2 Fuzzer: Array dimensions empty.");
-//	for (auto const& dim: _x.info())
-//		_vecOfStr.push_back(arrayDimInfoAsString(dim));
-//}
-
-//ProtoConverter::VecOfBoolUnsigned ProtoConverter::arrayDimensionsAsPairVector(
-//	ArrayType const& _x
-//)
-//{
-//	VecOfBoolUnsigned arrayDimsPairVector = {};
-//	for (auto const& dim: _x.info())
-//		arrayDimsPairVector.push_back(arrayDimInfoAsPair(dim));
-//	solAssert(!arrayDimsPairVector.empty(), "Proto ABIv2 Fuzzer: Array dimensions empty.");
-//	return arrayDimsPairVector;
-//}
-//
-//std::string ProtoConverter::getValueByBaseType(ArrayType const& _x)
-//{
-//	switch (_x.base_type_oneof_case())
-//	{
-//	case ArrayType::kInty:
-//		return integerValueAsString(isIntSigned(_x.inty()), getIntWidth(_x.inty()), getNextCounter());
-//	case ArrayType::kByty:
-//		return fixedByteValueAsString(getFixedByteWidth(_x.byty()), getNextCounter());
-//	case ArrayType::kAdty:
-//		return addressValueAsString(getNextCounter());
-//	case ArrayType::kBoolty:
-//		return boolValueAsString(getNextCounter());
-//	case ArrayType::kDynbytesty:
-//		return bytesArrayValueAsString(
-//			getNextCounter(),
-//			_x.dynbytesty().type() == DynamicByteArrayType::BYTES
-//		);
-//	case ArrayType::kStty:
-//		m_structBaseType = true;
-//		return "";
-//	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
-//		solAssert(false, "Proto ABIv2 fuzzer: Invalid array base type");
-//	}
-//}
-
-//ProtoConverter::ComparisonBuiltIn ProtoConverter::getDataTypeByBaseType(ArrayType const& _x)
-//{
-//	switch (_x.base_type_oneof_case())
-//	{
-//	case ArrayType::kInty:
-//	case ArrayType::kByty:
-//	case ArrayType::kAdty:
-//	case ArrayType::kBoolty:
-//		return ComparisonBuiltIn::VALUE;
-//	case ArrayType::kDynbytesty:
-//		return getDataTypeOfDynBytesType(_x.dynbytesty());
-//	case ArrayType::kStty:
-//	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
-//		solUnimplemented("Proto ABIv2 fuzzer: Invalid array base type");
-//	}
-//}
-//
-//// Adds a resize operation for a given dimension of type `_type` and expression referenced
-//// by `_var`. `_isStatic` is true for statically sized dimensions, false otherwise.
-//// `_arrayLen` is equal to length of statically sized array dimension. For dynamically
-//// sized dimension, we use `getDynArrayLengthFromFuzz()` and a monotonically increasing
-//// counter to obtain actual length. Function returns dimension length.
-//unsigned ProtoConverter::resizeDimension(
-//	bool _isStatic,
-//	unsigned _arrayLen,
-//	std::string const& _var,
-//	std::string const& _param,
-//	std::string const& _type
-//)
-//{
-//	unsigned length;
-//	if (_isStatic)
-//		length = _arrayLen;
-//	else
-//	{
-//		length = getDynArrayLengthFromFuzz(_arrayLen, getNextCounter());
-//
-//		// If local var, new T(l);
-//		// Else, l;
-//		std::string lhs, rhs;
-//		if (m_isStateVar)
-//		{
-//			lhs = _var + ".length";
-//			rhs = Whiskers(R"(<length>)")
-//				("length", std::to_string(length))
-//				.render();
-//		}
-//		else
-//		{
-//			lhs = _var;
-//			rhs = Whiskers(R"(new <type>(<length>))")
-//				("type", _type)
-//				("length", std::to_string(length))
-//				.render();
-//		}
-//		// If local var, x = new T(l);
-//		// Else, x.length = l;
-//		addVarDef(lhs, rhs);
-//	}
-//
-//	// if (c.length != l)
-//	checkResizeOp(_param, length);
-//	return length;
-//}
-//
-//void ProtoConverter::resizeHelper(
-//	ArrayType const& _x,
-//	std::vector<std::string> _arrStrVec,
-//	VecOfBoolUnsigned _arrInfoVec,
-//	std::string const& _varName,
-//	std::string const& _paramName
-//)
-//{
-//	// Initialize value expressions if we have arrived at leaf node,
-//	// (depth-first) recurse otherwise.
-//	if (_arrInfoVec.empty())
-//	{
-//		// expression name is _var
-//		// value is a value of base type
-//		std::string value = getValueByBaseType(_x);
-//		// add assignment and check
-//		ComparisonBuiltIn dataType = getDataTypeByBaseType(_x);
-//		addCheckedVarDef(dataType, _varName, _paramName, value);
-//	}
-//	else
-//	{
-//		auto& dim = _arrInfoVec.back();
-//
-//		std::string type = std::accumulate(
-//			_arrStrVec.begin(),
-//			_arrStrVec.end(),
-//			std::string("")
-//		);
-//		unsigned length = resizeDimension(dim.first, dim.second, _varName, _paramName, type);
-//		// Recurse one level dimension down.
-//		_arrStrVec.pop_back();
-//		_arrInfoVec.pop_back();
-//		for (unsigned i = 0; i < length; i++)
-//			resizeHelper(
-//				_x,
-//				_arrStrVec,
-//				_arrInfoVec,
-//				_varName + "[" + std::to_string(i) + "]",
-//				_paramName + "[" + std::to_string(i) + "]"
-//			);
-//	}
-//}
-//
-//// This function takes care of properly resizing and initializing ArrayType.
-//// In parallel, it adds runtime checks on array bound and values.
-//void ProtoConverter::resizeInitArray(
-//	ArrayType const& _x,
-//	std::string const& _baseType,
-//	std::string const& _varName,
-//	std::string const& _paramName
-//)
-//{
-//	VecOfBoolUnsigned arrInfoVec = arrayDimensionsAsPairVector(_x);
-//	std::vector<std::string> arrStrVec = {_baseType};
-//	arrayDimensionsAsStringVector(_x, arrStrVec);
-//	resizeHelper(_x, arrStrVec, arrInfoVec, _varName, _paramName);
-//}
-//
-//// Returns array type from it's base type (e.g., int8) and array dimensions info contained in
-//// ArrayType.
-//std::string ProtoConverter::arrayTypeAsString(std::string const& _baseType, ArrayType const& _x)
-//{
-//	std::vector<std::string> typeStringVec = {_baseType};
-//	arrayDimensionsAsStringVector(_x, typeStringVec);
-//
-//	return std::accumulate(
-//		typeStringVec.begin(),
-//		typeStringVec.end(),
-//		std::string("")
-//	);
-//}
-//
-//void ProtoConverter::visit(ArrayType const& _x)
-//{
-//	// Bail out if input contains too few or too many dimensions.
-//	if (_x.info_size() == 0 || _x.info_size() > (int)s_maxArrayDimensions)
-//		return;
-//
-//	// Array type is dynamically encoded if one of the following is true
-//	//   - array base type is "bytes" or "string"
-//	//   - at least one array dimension is dynamically sized.
-//	if (_x.base_type_oneof_case() == ArrayType::kDynbytesty)
-//		m_isLastDynParamRightPadded = true;
-//	else
-//		for (auto const& dim: _x.info())
-//			if (!dim.is_static())
-//			{
-//				m_isLastDynParamRightPadded = true;
-//				break;
-//			}
-//
-//	string baseType = {};
-//	switch (_x.base_type_oneof_case())
-//	{
-//	case ArrayType::kInty:
-//		baseType = getIntTypeAsString(_x.inty());
-//		break;
-//	case ArrayType::kByty:
-//		baseType = getFixedByteTypeAsString(_x.byty());
-//		break;
-//	case ArrayType::kAdty:
-//		baseType = getAddressTypeAsString(_x.adty());
-//		break;
-//	case ArrayType::kBoolty:
-//		baseType = getBoolTypeAsString();
-//		break;
-//	case ArrayType::kDynbytesty:
-//		baseType = bytesArrayTypeAsString(_x.dynbytesty());
-//		break;
-//	case ArrayType::kStty:
-//	case ArrayType::BASE_TYPE_ONEOF_NOT_SET:
-//		return;
-//	}
-//	visitArrayType(baseType, _x);
-//}
 
 pair<string, string> ProtoConverter::visit(VarDecl const& _x)
 {
@@ -665,8 +404,6 @@ pragma experimental ABIEncoderV2;)";
 	string storageVarDefs = storageBuffers.second;
 	m_isStateVar = false;
 	string testFunction = visit(_x.testfunction(), storageVarDefs);
-	ostringstream contractBody;
-
 	/* Structure of contract body
 	 * - Storage variable declarations
 	 * - Struct type declarations
@@ -676,6 +413,7 @@ pragma experimental ABIEncoderV2;)";
 	 *     - Test code proper (calls public and external functions)
 	 * - Helper functions
 	 */
+	ostringstream contractBody;
 	contractBody << storageVarDecls
 	             << testFunction
 	             << helperFunctions();
@@ -699,22 +437,26 @@ string ProtoConverter::contractToString(Contract const& _input)
 /// Type visitor
 string TypeVisitor::visit(BoolType const&)
 {
-	return "bool";
+	m_baseType = "bool";
+	return m_baseType;
 }
 
 string TypeVisitor::visit(IntegerType const& _type)
 {
-	return getIntTypeAsString(_type);
+	m_baseType = getIntTypeAsString(_type);
+	return m_baseType;
 }
 
 string TypeVisitor::visit(FixedByteType const& _type)
 {
-	return getFixedByteTypeAsString(_type);
+	m_baseType = getFixedByteTypeAsString(_type);
+	return m_baseType;
 }
 
 string TypeVisitor::visit(AddressType const& _type)
 {
-	return getAddressTypeAsString(_type);
+	m_baseType = getAddressTypeAsString(_type);
+	return m_baseType;
 }
 
 string TypeVisitor::visit(ArrayType const& _type)
@@ -730,24 +472,32 @@ string TypeVisitor::visit(ArrayType const& _type)
 		to_string(getStaticArrayLengthFromFuzz(_type.length())) +
 		string("]") :
 		string("[]");
-	m_array << arrayBraces;
+	m_arrayParens.push_back(arrayBraces);
+	m_baseType += arrayBraces;
 	return baseType + arrayBraces;
 }
 
 string TypeVisitor::visit(DynamicByteArrayType const& _type)
 {
-	return bytesArrayTypeAsString(_type);
+	m_baseType = bytesArrayTypeAsString(_type);
+	return m_baseType;
 }
 
 string TypeVisitor::visit(StructType const&)
 {
-	return s_structTypeName + to_string(m_structSuffix);
+	m_baseType = s_structTypeName + to_string(m_structSuffix);
+	return m_baseType;
 }
 
 /// StructDeclVisitor implementation
 string StructDeclVisitor::visit(StructType const& _type)
 {
-	string structDecl = lineString("struct S" + to_string(m_structCounter++) + " {");
+	string structDecl = lineString(
+		"struct " +
+		string(s_structNamePrefix) +
+		to_string(m_structCounter++) +
+		" {"
+		);
 	m_indentation++;
 	for (auto const& t: _type.t())
 	{
@@ -775,115 +525,158 @@ string StructDeclVisitor::visit(StructType const& _type)
 /// AssignCheckVisitor implementation
 pair<string, string> AssignCheckVisitor::visit(BoolType const& _type)
 {
-	string value = ValueGetterVisitor().visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, DataType::VALUE);
+	string value = ValueGetterVisitor(counter()).visit(_type);
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::VALUE);
 }
 
 pair<string, string> AssignCheckVisitor::visit(IntegerType const& _type)
 {
-	string value = ValueGetterVisitor().visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, DataType::VALUE);
+	string value = ValueGetterVisitor(counter()).visit(_type);
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::VALUE);
 }
 
 pair<string, string> AssignCheckVisitor::visit(FixedByteType const& _type)
 {
-	string value = ValueGetterVisitor().visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, DataType::VALUE);
+	string value = ValueGetterVisitor(counter()).visit(_type);
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::VALUE);
 }
 
 pair<string, string> AssignCheckVisitor::visit(AddressType const& _type)
 {
-	string value = ValueGetterVisitor().visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, DataType::VALUE);
+	string value = ValueGetterVisitor(counter()).visit(_type);
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::VALUE);
 }
 
 pair<string, string> AssignCheckVisitor::visit(DynamicByteArrayType const& _type)
 {
-	string value = ValueGetterVisitor().visit(_type);
-	return assignAndCheckStringPair(m_varName, m_paramName, value, DataType::VALUE);
+	string value = ValueGetterVisitor(counter()).visit(_type);
+	return assignAndCheckStringPair(m_varName, m_paramName, value, value, DataType::BYTES);
 }
 
-//string AssignCheckVisitor::visit(ArrayType const& _type)
-//{
-//	ostringstream qualBaseType;
-//	TypeVisitor t = TypeVisitor{_type.t()};
-//	t.print(qualBaseType);
-//	string qualType = t.m_array.str();
-//	unsigned arrayDimensionSize;
-//	if (_type.is_static())
-//		arrayDimensionSize = getStaticArrayLengthFromFuzz(_type.length());
-//	else
-//	{
-//		arrayDimensionSize = getDynArrayLengthFromFuzz(_type.length(), counter());
-//		if (qualType.empty())
-//			assignString(
-//				m_varName,
-//
-//			);
-//		assignString(
-//			m_varName + qualType,
-//			"new " + t.m_array
-//		);
-//	}
-//
-//	checkString(
-//		m_paramName + t.m_array + ".length",
-//		arrayDimensionSize,
-//		ComparisonBuiltIn::VALUE
-//	);
-//
-//
-//	// Resize only if dynamically sized
-//	if (m_stateVar)
-//		assignAndCheckStringPair(
-//			m_varName + ".length",
-//			m_paramName + ".length",
-//			length,
-//			ComparisonBuiltIn::ARRAY
-//		);
-//	else
-//	{
-//		ostringstream arrayType;
-//		TypeVisitor{*m_type}.print(arrayType);
-//
-//
-//		assignString(typeStr, typeStr(length));
-//		checkString(typeStr, typeStr(length));
-//	}
-//	//	for (0..arrayDimensionSize) visit()
-//}
-//
-//string AssignCheckVisitor::visit(DynamicByteArrayType const& _type)
-//{
-//	bool isBytes = _type.type() == DynamicByteArrayType::BYTES;
-//	string value = bytesArrayValueAsString(counter(), isBytes);
-//	assignString(m_varName, value);
-//	checkString(m_paramName, value, ComparisonBuiltIn::VALUE);
-//	// Update right padding of type
-//	m_isLastDynParamRightPadded = true;
-//	return true;
-//}
-//
-
-// FIXME: Implement these
-pair<string, string> AssignCheckVisitor::visit(ArrayType const&)
+Type const& AssignCheckVisitor::getBaseType(ArrayType const& _type)
 {
-	return make_pair("", "");
+	Type const& bType = _type.t();
+	while (bType.has_nvtype() && bType.nvtype().has_arrtype())
+	{
+		return getBaseType(bType.nvtype().arrtype());
+	}
+	return bType;
 }
 
-pair<string, string> AssignCheckVisitor::visit(StructType const&)
+string AssignCheckVisitor::concatFirstN(vector<string> const& _vec, unsigned _n)
 {
-	return make_pair("", "");
+	solAssert(_n <= _vec.size(), "ABIv2 proto fuzzer: Invalid concatenation op");
+
+	string s;
+	for (auto it = _vec.begin(); it < _vec.begin() + _n; it++)
+		s += *it;
+	return s;
+}
+
+pair<string, string> AssignCheckVisitor::visit(ArrayType const& _type)
+{
+	string typeStr = TypeVisitor(m_structCounter - 1).visit(_type);
+	pair<string, string> resizeBuffer;
+	string lengthStr;
+	unsigned length;
+
+	// Resize dynamic arrays
+	if (!_type.is_static())
+	{
+		length = getDynArrayLengthFromFuzz(_type.length(), counter());
+		lengthStr = to_string(length);
+		if (m_stateVar)
+			resizeBuffer = assignAndCheckStringPair(
+				m_varName + ".length",
+				m_paramName + ".length",
+				lengthStr,
+				lengthStr,
+				DataType::VALUE
+				);
+		else
+		{
+			// Resizing memory arrays via the new operator
+			string resizeOp = Whiskers(R"(new <fullTypeStr>(<length>))")
+				("fullTypeStr", typeStr)
+				("length", lengthStr)
+				.render();
+			resizeBuffer = assignAndCheckStringPair(
+				m_varName,
+				m_paramName + ".length",
+				resizeOp,
+				lengthStr,
+				DataType::VALUE
+				);
+		}
+	}
+	else
+	{
+		length = getStaticArrayLengthFromFuzz(_type.length());
+		lengthStr = to_string(length);
+		// Add check on length
+		resizeBuffer.second = checkString(m_paramName + ".length", lengthStr, DataType::VALUE);
+	}
+
+	// Add assignCheckBuffer and check statements
+	pair<string, string> assignCheckBuffer;
+	for (unsigned i = 0; i < length; i++)
+	{
+		AssignCheckVisitor acVisitor(
+			m_varName + "[" + to_string(i) + "]",
+			m_paramName + "[" + to_string(i) + "]",
+			m_errorCode,
+			m_stateVar,
+			m_counter,
+			m_structCounter
+			);
+		pair<string, string> assign = acVisitor.visit(_type.t());
+		m_errorCode += acVisitor.errorStmts();
+		m_counter += acVisitor.counted();
+		assignCheckBuffer.first += assign.first;
+		assignCheckBuffer.second += assign.second;
+	}
+
+	// Compose resize and initialization assignment and check
+	return make_pair(
+		resizeBuffer.first + assignCheckBuffer.first,
+		resizeBuffer.second + assignCheckBuffer.second
+	);
+}
+
+pair<string, string> AssignCheckVisitor::visit(StructType const& _type)
+{
+	pair<string, string> assignCheckBuffer;
+	unsigned i = 0;
+	for (auto const& t: _type.t())
+	{
+		AssignCheckVisitor acVisitor(
+			m_varName + ".m" + to_string(i),
+			m_paramName + ".m" + to_string(i),
+			m_errorCode,
+			m_stateVar,
+			m_counter,
+			m_structCounter
+		);
+		pair<string, string> assign = acVisitor.visit(t);
+		m_errorCode += acVisitor.errorStmts();
+		m_counter += acVisitor.counted();
+		m_structCounter += acVisitor.structs();
+		assignCheckBuffer.first += assign.first;
+		assignCheckBuffer.second += assign.second;
+		i++;
+	}
+	return assignCheckBuffer;
 }
 
 pair<string, string> AssignCheckVisitor::assignAndCheckStringPair(
 	string const& _varRef,
 	string const& _checkRef,
-	string const& _value,
+	string const& _assignValue,
+	string const& _checkValue,
 	DataType _type
 )
 {
-	return make_pair(assignString(_varRef, _value), checkString(_checkRef, _value, _type));
+	return make_pair(assignString(_varRef, _assignValue), checkString(_checkRef, _checkValue, _type));
 }
 
 string AssignCheckVisitor::assignString(string const& _ref, string const& _value)
